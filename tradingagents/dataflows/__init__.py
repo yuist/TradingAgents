@@ -23,6 +23,15 @@ from .interface import (
     # Market data functions
     get_YFin_data_window,
     get_YFin_data,
+    # Alpha Vantage functions
+    get_alpha_vantage_stock_data,
+    get_alpha_vantage_fundamentals,
+    get_alpha_vantage_technical_indicators,
+    # Polygon functions
+    get_polygon_stock_data,
+    get_polygon_company_news,
+    get_polygon_company_financials,
+    get_polygon_market_status,
 )
 
 __all__ = [
@@ -43,4 +52,13 @@ __all__ = [
     # Market data functions
     "get_YFin_data_window",
     "get_YFin_data",
+    # Alpha Vantage functions
+    "get_alpha_vantage_stock_data",
+    "get_alpha_vantage_fundamentals",
+    "get_alpha_vantage_technical_indicators",
+    # Polygon functions
+    "get_polygon_stock_data",
+    "get_polygon_company_news",
+    "get_polygon_company_financials",
+    "get_polygon_market_status",
 ]

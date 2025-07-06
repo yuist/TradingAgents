@@ -4,6 +4,17 @@ from .yfin_utils import *
 from .stockstats_utils import *
 from .googlenews_utils import *
 from .finnhub_utils import get_data_in_range
+from .alpha_vantage_utils import (
+    get_stock_data_alpha_vantage,
+    get_company_fundamentals_alpha_vantage,
+    get_technical_indicators_alpha_vantage
+)
+from .polygon_utils import (
+    get_stock_data_polygon,
+    get_company_news_polygon,
+    get_company_financials_polygon,
+    get_market_status_polygon
+)
 from dateutil.relativedelta import relativedelta
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -13,7 +24,21 @@ import pandas as pd
 from tqdm import tqdm
 import yfinance as yf
 from openai import OpenAI
-from .config import get_config, set_config, DATA_DIR
+import time
+# 移除对旧配置系统的依赖，现在使用主配置管理器
+from ..utils.retry_utils import with_retry, safe_execute, get_error_message, with_yahoo_finance_retry
+from ..config_manager import get_config_manager
+from .qwen_config import QwenConfigManager
+from ..utils.logging_manager import get_logger
+
+# 配置日志
+logger = get_logger('dataflow', 'interface')
+
+def _get_data_dir():
+    """获取数据目录路径"""
+    from ..config_manager import get_config_manager
+    config_manager = get_config_manager()
+    return config_manager.config.get('data_dir', 'data')
 
 
 def get_finnhub_news(
@@ -40,7 +65,7 @@ def get_finnhub_news(
     before = start_date - relativedelta(days=look_back_days)
     before = before.strftime("%Y-%m-%d")
 
-    result = get_data_in_range(ticker, before, curr_date, "news_data", DATA_DIR)
+    result = get_data_in_range(ticker, before, curr_date, "news_data", _get_data_dir())
 
     if len(result) == 0:
         return ""
@@ -79,7 +104,7 @@ def get_finnhub_company_insider_sentiment(
     before = date_obj - relativedelta(days=look_back_days)
     before = before.strftime("%Y-%m-%d")
 
-    data = get_data_in_range(ticker, before, curr_date, "insider_senti", DATA_DIR)
+    data = get_data_in_range(ticker, before, curr_date, "insider_senti", _get_data_dir())
 
     if len(data) == 0:
         return ""
@@ -120,7 +145,7 @@ def get_finnhub_company_insider_transactions(
     before = date_obj - relativedelta(days=look_back_days)
     before = before.strftime("%Y-%m-%d")
 
-    data = get_data_in_range(ticker, before, curr_date, "insider_trans", DATA_DIR)
+    data = get_data_in_range(ticker, before, curr_date, "insider_trans", _get_data_dir())
 
     if len(data) == 0:
         return ""
@@ -150,7 +175,7 @@ def get_simfin_balance_sheet(
     curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],
 ):
     data_path = os.path.join(
-        DATA_DIR,
+        _get_data_dir(),
         "fundamental_data",
         "simfin_data_all",
         "balance_sheet",
@@ -172,7 +197,16 @@ def get_simfin_balance_sheet(
 
     # Check if there are any available reports; if not, return a notification
     if filtered_df.empty:
-        print("No balance sheet available before the given current date.")
+        logger.warning(
+            "No balance sheet available before the given current date",
+            extra={
+                'ticker': ticker,
+                'freq': freq,
+                'curr_date': curr_date,
+                'component': 'interface',
+                'function': 'get_simfin_balance_sheet'
+            }
+        )
         return ""
 
     # Get the most recent balance sheet by selecting the row with the latest Publish Date
@@ -197,7 +231,7 @@ def get_simfin_cashflow(
     curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],
 ):
     data_path = os.path.join(
-        DATA_DIR,
+        _get_data_dir(),
         "fundamental_data",
         "simfin_data_all",
         "cash_flow",
@@ -219,7 +253,16 @@ def get_simfin_cashflow(
 
     # Check if there are any available reports; if not, return a notification
     if filtered_df.empty:
-        print("No cash flow statement available before the given current date.")
+        logger.warning(
+            "No cash flow statement available before the given current date",
+            extra={
+                'component': 'interface',
+                'function': 'get_simfin_cashflow',
+                'ticker': ticker,
+                'freq': freq,
+                'curr_date': curr_date
+            }
+        )
         return ""
 
     # Get the most recent cash flow statement by selecting the row with the latest Publish Date
@@ -244,7 +287,7 @@ def get_simfin_income_statements(
     curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],
 ):
     data_path = os.path.join(
-        DATA_DIR,
+        _get_data_dir(),
         "fundamental_data",
         "simfin_data_all",
         "income_statements",
@@ -266,7 +309,16 @@ def get_simfin_income_statements(
 
     # Check if there are any available reports; if not, return a notification
     if filtered_df.empty:
-        print("No income statement available before the given current date.")
+        logger.warning(
+            "No income statement available before the given current date",
+            extra={
+                'component': 'interface',
+                'function': 'get_simfin_income_statements',
+                'ticker': ticker,
+                'freq': freq,
+                'curr_date': curr_date
+            }
+        )
         return ""
 
     # Get the most recent income statement by selecting the row with the latest Publish Date
@@ -339,7 +391,7 @@ def get_reddit_global_news(
             "global_news",
             curr_date_str,
             max_limit_per_day,
-            data_path=os.path.join(DATA_DIR, "reddit_data"),
+            data_path=os.path.join(_get_data_dir(), "reddit_data"),
         )
         posts.extend(fetch_result)
         curr_date += relativedelta(days=1)
@@ -397,7 +449,7 @@ def get_reddit_company_news(
             curr_date_str,
             max_limit_per_day,
             ticker,
-            data_path=os.path.join(DATA_DIR, "reddit_data"),
+            data_path=os.path.join(_get_data_dir(), "reddit_data"),
         )
         posts.extend(fetch_result)
         curr_date += relativedelta(days=1)
@@ -515,7 +567,7 @@ def get_stock_stats_indicators_window(
         # read from YFin data
         data = pd.read_csv(
             os.path.join(
-                DATA_DIR,
+                _get_data_dir(),
                 f"market_data/price_data/{symbol}-YFin-data-2015-01-01-2025-03-25.csv",
             )
         )
@@ -572,12 +624,21 @@ def get_stockstats_indicator(
             symbol,
             indicator,
             curr_date,
-            os.path.join(DATA_DIR, "market_data", "price_data"),
+            os.path.join(_get_data_dir(), "market_data", "price_data"),
             online=online,
         )
     except Exception as e:
-        print(
-            f"Error getting stockstats indicator data for indicator {indicator} on {curr_date}: {e}"
+        logger.error(
+            f"Error getting stockstats indicator data for {symbol} {indicator} on {curr_date}: {type(e).__name__}: {str(e)}",
+            extra={
+                'component': 'interface',
+                'function': 'get_stockstats_indicator',
+                'symbol': symbol,
+                'indicator': indicator,
+                'curr_date': curr_date,
+                'error_type': type(e).__name__,
+                'error_message': str(e)
+            }
         )
         return ""
 
@@ -597,7 +658,7 @@ def get_YFin_data_window(
     # read in data
     data = pd.read_csv(
         os.path.join(
-            DATA_DIR,
+            _get_data_dir(),
             f"market_data/price_data/{symbol}-YFin-data-2015-01-01-2025-03-25.csv",
         )
     )
@@ -625,46 +686,124 @@ def get_YFin_data_window(
     )
 
 
+@with_yahoo_finance_retry(
+    max_retries=3,
+    initial_delay=60.0,
+    max_delay=600.0,
+    backoff_factor=2.0,
+    rate_limit_interval=30.0
+)
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
     end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+    quick_fail: bool = False,
 ):
-
+    """获取股票数据，使用多数据源系统提供备用支持
+    
+    Args:
+        symbol: 股票代码
+        start_date: 开始日期
+        end_date: 结束日期
+        quick_fail: 快速失败模式，减少等待时间
+    """
+    
+    # 验证日期格式
     datetime.strptime(start_date, "%Y-%m-%d")
     datetime.strptime(end_date, "%Y-%m-%d")
-
-    # Create ticker object
-    ticker = yf.Ticker(symbol.upper())
-
-    # Fetch historical data for the specified date range
-    data = ticker.history(start=start_date, end=end_date)
-
-    # Check if data is empty
-    if data.empty:
-        return (
-            f"No data found for symbol '{symbol}' between {start_date} and {end_date}"
-        )
-
-    # Remove timezone info from index for cleaner output
-    if data.index.tz is not None:
-        data.index = data.index.tz_localize(None)
-
-    # Round numerical values to 2 decimal places for cleaner display
-    numeric_columns = ["Open", "High", "Low", "Close", "Adj Close"]
-    for col in numeric_columns:
-        if col in data.columns:
-            data[col] = data[col].round(2)
-
-    # Convert DataFrame to CSV string
-    csv_string = data.to_csv()
-
-    # Add header information
-    header = f"# Stock data for {symbol.upper()} from {start_date} to {end_date}\n"
-    header += f"# Total records: {len(data)}\n"
-    header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-
-    return header + csv_string
+    
+    mode_desc = "快速失败模式" if quick_fail else "标准模式"
+    logger.info(f"正在获取 {symbol} 的股票数据，时间范围: {start_date} 到 {end_date}，模式: {mode_desc}")
+    
+    # 快速失败模式：跳过多数据源系统，直接使用简化的Yahoo Finance
+    if quick_fail:
+        logger.info("快速失败模式：直接使用Yahoo Finance，跳过多数据源系统")
+    else:
+        try:
+            # 尝试使用增强的多数据源接口
+            from .enhanced_interface import get_YFin_data_online_enhanced
+            result = get_YFin_data_online_enhanced(symbol, start_date, end_date)
+            
+            # 如果增强接口返回有效数据，直接返回
+            if result and not result.startswith("数据获取失败") and not result.startswith("未找到"):
+                logger.info(f"通过多数据源系统成功获取 {symbol} 的股票数据")
+                return result
+            else:
+                logger.warning(f"多数据源系统未能获取数据，回退到原始Yahoo Finance接口")
+                
+        except Exception as e:
+            logger.warning(f"多数据源系统调用失败: {e}，回退到原始Yahoo Finance接口")
+    
+    # 回退到原始的Yahoo Finance实现
+    try:
+        import yfinance as yf
+        
+        # Create ticker object
+        ticker = yf.Ticker(symbol.upper())
+        
+        # 在快速失败模式下设置更短的超时时间
+        if quick_fail:
+            logger.info("快速失败模式：使用5秒超时")
+            # 使用线程超时机制（Windows兼容）
+            import threading
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+            
+            def fetch_data():
+                return ticker.history(start=start_date, end=end_date)
+            
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(fetch_data)
+                    data = future.result(timeout=5)  # 5秒超时
+            except FutureTimeoutError:
+                raise TimeoutError("Yahoo Finance请求超时（快速失败模式，5秒）")
+        else:
+            # Fetch historical data for the specified date range with timeout
+            import threading
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+            
+            def fetch_data():
+                return ticker.history(start=start_date, end=end_date)
+            
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(fetch_data)
+                    data = future.result(timeout=30)  # 30秒超时
+            except FutureTimeoutError:
+                raise TimeoutError("Yahoo Finance请求超时（标准模式，30秒）")
+        
+        # Check if data is empty
+        if data.empty:
+            warning_msg = f"未找到股票代码 '{symbol}' 在 {start_date} 到 {end_date} 期间的数据"
+            logger.warning(warning_msg)
+            return warning_msg
+        
+        # Remove timezone info from index for cleaner output
+        if data.index.tz is not None:
+            data.index = data.index.tz_localize(None)
+        
+        # Round numerical values to 2 decimal places for cleaner display
+        numeric_columns = ["Open", "High", "Low", "Close", "Adj Close"]
+        for col in numeric_columns:
+            if col in data.columns:
+                data[col] = data[col].round(2)
+        
+        # Convert DataFrame to CSV string
+        csv_string = data.to_csv()
+        
+        # Add header information
+        header = f"# Stock data for {symbol.upper()} from {start_date} to {end_date}\n"
+        header += f"# Total records: {len(data)}\n"
+        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        header += f"# Data source: Yahoo Finance (fallback)\n\n"
+        
+        logger.info(f"通过Yahoo Finance回退接口成功获取 {symbol} 的股票数据，共 {len(data)} 条记录")
+        return header + csv_string
+        
+    except Exception as e:
+        error_msg = f"所有数据源均失败，无法获取 {symbol} 的股票数据: {str(e)}"
+        logger.error(error_msg)
+        return f"数据获取失败: {error_msg}"
 
 
 def get_YFin_data(
@@ -675,7 +814,7 @@ def get_YFin_data(
     # read in data
     data = pd.read_csv(
         os.path.join(
-            DATA_DIR,
+            _get_data_dir(),
             f"market_data/price_data/{symbol}-YFin-data-2015-01-01-2025-03-25.csv",
         )
     )
@@ -702,106 +841,424 @@ def get_YFin_data(
     return filtered_data
 
 
-def get_stock_news_openai(ticker, curr_date):
-    config = get_config()
-    client = OpenAI(base_url=config["backend_url"])
+@with_retry(max_retries=3, delay=2)
+def get_stock_news_openai(ticker: str, curr_date: str) -> str:
+    """使用LLM Web Search获取股票新闻数据
+    
+    支持的提供商:
+    - OpenAI: 使用web_search_options参数
+    - Qwen: 使用enable_search参数
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        
+    Returns:
+        str: 新闻内容或错误信息
+    """
+    logger.info(f"正在使用LLM Web Search获取股票 {ticker} 的新闻数据，日期: {curr_date}")
+    
+    def _fetch_news():
+        from ..config_manager import get_config_manager
+        config_manager = get_config_manager()
+        llm_config = config_manager.get_llm_config()
+        
+        # 验证配置
+        if not llm_config.api_key:
+            error_msg = f"API密钥未配置，提供商: {config_manager.config['models']['llm_provider']}"
+            logger.error(error_msg)
+            raise ValueError(f"配置错误: {error_msg}")
+        
+        client = OpenAI(
+            api_key=llm_config.api_key,
+            base_url=llm_config.base_url,
+            timeout=120,
+            max_retries=3
+        )
 
-    response = client.responses.create(
-        model=config["quick_think_llm"],
-        input=[
-            {
-                "role": "system",
-                "content": [
+        provider = llm_config.provider
+        model = llm_config.quick_think_model
+        
+        # 根据提供商配置不同的搜索参数
+        if provider == "qwen":
+            # 使用QwenConfigManager获取优化的配置
+            extra_body_config = QwenConfigManager.get_news_search_config(
+                model=model,
+                task_type="stock_news"
+            )
+            
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
                     {
-                        "type": "input_text",
-                        "text": f"Can you search Social Media for {ticker} from 7 days before {curr_date} to {curr_date}? Make sure you only get the data posted during that period.",
+                        "role": "user",
+                        "content": f"Search for recent news and social media discussions about {ticker} stock from 7 days before {curr_date} to {curr_date}. Focus on news that could impact stock price and trading decisions. Please provide sources and dates."
                     }
                 ],
-            }
-        ],
-        text={"format": {"type": "text"}},
-        reasoning={},
-        tools=[
-            {
-                "type": "web_search_preview",
-                "user_location": {"type": "approximate"},
-                "search_context_size": "low",
-            }
-        ],
-        temperature=1,
-        max_output_tokens=4096,
-        top_p=1,
-        store=True,
-    )
-
-    return response.output[1].content[0].text
-
-
-def get_global_news_openai(curr_date):
-    config = get_config()
-    client = OpenAI(base_url=config["backend_url"])
-
-    response = client.responses.create(
-        model=config["quick_think_llm"],
-        input=[
-            {
-                "role": "system",
-                "content": [
+                temperature=0.1,
+                max_tokens=4096,
+                extra_body=extra_body_config
+            )
+        else:
+            # OpenAI等其他提供商使用web_search_options
+            if provider == "openai":
+                model = "gpt-4o-search-preview"  # OpenAI专用搜索模型
+            
+            response = client.chat.completions.create(
+                model=model,
+                web_search_options={},  # 启用web search
+                messages=[
                     {
-                        "type": "input_text",
-                        "text": f"Can you search global or macroeconomics news from 7 days before {curr_date} to {curr_date} that would be informative for trading purposes? Make sure you only get the data posted during that period.",
+                        "role": "user",
+                        "content": f"Search for recent news and social media discussions about {ticker} stock from 7 days before {curr_date} to {curr_date}. Focus on news that could impact stock price and trading decisions. Please provide sources and dates."
                     }
                 ],
-            }
-        ],
-        text={"format": {"type": "text"}},
-        reasoning={},
-        tools=[
-            {
-                "type": "web_search_preview",
-                "user_location": {"type": "approximate"},
-                "search_context_size": "low",
-            }
-        ],
-        temperature=1,
-        max_output_tokens=4096,
-        top_p=1,
-        store=True,
-    )
+                temperature=0.1,
+                max_tokens=4096
+            )
 
-    return response.output[1].content[0].text
+        # 验证响应结构
+        if not response.choices or len(response.choices) == 0:
+            error_msg = "API返回了空响应"
+            logger.warning(error_msg)
+            raise ValueError(f"数据获取失败: {error_msg}")
+            
+        content = response.choices[0].message.content
+        if not content:
+            error_msg = "API返回的内容为空"
+            logger.warning(error_msg)
+            raise ValueError(f"数据获取失败: {error_msg}")
+            
+        logger.info(f"成功获取股票 {ticker} 的新闻数据，内容长度: {len(content)}")
+        return content
+    
+    # 使用安全执行函数
+    result = safe_execute(_fetch_news, fallback_value=None)
+    
+    if result is None:
+        error_msg = f"无法获取股票 {ticker} 的新闻数据，请稍后重试"
+        logger.warning(error_msg)
+        return f"数据获取失败: {error_msg}"
+    
+    return result
 
 
-def get_fundamentals_openai(ticker, curr_date):
-    config = get_config()
-    client = OpenAI(base_url=config["backend_url"])
+@with_retry(max_retries=3, delay=2)
+def get_global_news_openai(curr_date: str) -> str:
+    """使用OpenAI Web Search获取全球新闻数据
+    
+    Args:
+        curr_date: 当前日期
+        
+    Returns:
+        str: 新闻内容或错误信息
+    """
+    logger.info(f"正在使用OpenAI Web Search获取全球新闻数据，日期: {curr_date}")
+    
+    def _fetch_global_news():
+        from ..config_manager import get_config_manager
+        config_manager = get_config_manager()
+        llm_config = config_manager.get_llm_config()
+        
+        # 验证配置
+        if not llm_config.api_key:
+            error_msg = f"API密钥未配置，提供商: {config_manager.config['models']['llm_provider']}"
+            logger.error(error_msg)
+            raise ValueError(f"配置错误: {error_msg}")
+        
+        client = OpenAI(
+            api_key=llm_config.api_key,
+            base_url=llm_config.base_url,
+            timeout=120,
+            max_retries=3
+        )
 
-    response = client.responses.create(
-        model=config["quick_think_llm"],
-        input=[
-            {
-                "role": "system",
-                "content": [
+        provider = llm_config.provider
+        model = llm_config.quick_think_model
+        
+        # 根据提供商配置不同的搜索参数
+        if provider == "qwen":
+            # 使用QwenConfigManager获取优化的配置
+            extra_body_config = QwenConfigManager.get_news_search_config(
+                model=model,
+                task_type="global_news"
+            )
+            
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
                     {
-                        "type": "input_text",
-                        "text": f"Can you search Fundamental for discussions on {ticker} during of the month before {curr_date} to the month of {curr_date}. Make sure you only get the data posted during that period. List as a table, with PE/PS/Cash flow/ etc",
+                        "role": "user",
+                        "content": f"Search for global macroeconomic news and market-moving events from 7 days before {curr_date} to {curr_date}. Focus on central bank decisions, economic indicators, geopolitical events, and other news that could impact financial markets. Please provide sources and dates."
                     }
                 ],
-            }
-        ],
-        text={"format": {"type": "text"}},
-        reasoning={},
-        tools=[
-            {
-                "type": "web_search_preview",
-                "user_location": {"type": "approximate"},
-                "search_context_size": "low",
-            }
-        ],
-        temperature=1,
-        max_output_tokens=4096,
-        top_p=1,
-        store=True,
-    )
+                temperature=0.1,
+                max_tokens=4096,
+                extra_body=extra_body_config
+            )
+        else:
+            # OpenAI等其他提供商使用web_search_options
+            if provider == "openai":
+                model = "gpt-4o-search-preview"  # OpenAI专用搜索模型
+            
+            response = client.chat.completions.create(
+                model=model,
+                web_search_options={},  # 启用web search
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Search for global macroeconomic news and market-moving events from 7 days before {curr_date} to {curr_date}. Focus on central bank decisions, economic indicators, geopolitical events, and other news that could impact financial markets. Please provide sources and dates."
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=4096
+            )
 
-    return response.output[1].content[0].text
+        # 验证响应结构
+        if not response.choices or len(response.choices) == 0:
+            error_msg = "API返回了空响应"
+            logger.warning(error_msg)
+            raise ValueError(f"数据获取失败: {error_msg}")
+            
+        content = response.choices[0].message.content
+        if not content:
+            error_msg = "API返回的内容为空"
+            logger.warning(error_msg)
+            raise ValueError(f"数据获取失败: {error_msg}")
+            
+        logger.info(f"成功获取全球新闻数据，内容长度: {len(content)}")
+        return content
+    
+    # 使用安全执行函数
+    result = safe_execute(_fetch_global_news, fallback_value=None)
+    
+    if result is None:
+        error_msg = "无法获取全球新闻数据，请稍后重试"
+        logger.warning(error_msg)
+        return f"数据获取失败: {error_msg}"
+    
+    return result
+
+
+@with_retry(max_retries=3, delay=2)
+def get_fundamentals_openai(ticker: str, curr_date: str) -> str:
+    """获取基本面数据
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        
+    Returns:
+        str: 基本面数据或错误信息
+    """
+    logger.info(f"正在获取股票 {ticker} 的基本面数据，日期: {curr_date}")
+    
+    def _fetch_fundamentals():
+        from ..config_manager import get_config_manager
+        config_manager = get_config_manager()
+        llm_config = config_manager.get_llm_config()
+        
+        # 验证配置
+        if not llm_config.api_key:
+            error_msg = f"API密钥未配置，提供商: {config_manager.config['models']['llm_provider']}"
+            logger.error(error_msg)
+            raise ValueError(f"配置错误: {error_msg}")
+        
+        client = OpenAI(
+            api_key=llm_config.api_key,
+            base_url=llm_config.base_url,
+            timeout=120,
+            max_retries=3
+        )
+
+        response = client.chat.completions.create(
+            model=config_manager.config['models']['quick_think_llm'],
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Can you search Fundamental for discussions on {ticker} during of the month before {curr_date} to the month of {curr_date}. Make sure you only get the data posted during that period. List as a table, with PE/PS/Cash flow/ etc"
+                }
+            ],
+            temperature=1,
+            max_tokens=4096,
+            top_p=1
+        )
+
+        # 验证响应结构
+        if not response.choices or len(response.choices) == 0:
+            error_msg = "API返回了空响应"
+            logger.warning(error_msg)
+            raise ValueError(f"数据获取失败: {error_msg}")
+            
+        content = response.choices[0].message.content
+        if not content:
+            error_msg = "API返回的内容为空"
+            logger.warning(error_msg)
+            raise ValueError(f"数据获取失败: {error_msg}")
+            
+        logger.info(f"成功获取股票 {ticker} 的基本面数据，内容长度: {len(content)}")
+        return content
+    
+    # 使用安全执行函数
+    result = safe_execute(_fetch_fundamentals, fallback_value=None)
+    
+    if result is None:
+        error_msg = f"无法获取股票 {ticker} 的基本面数据，请稍后重试"
+        logger.warning(error_msg)
+        return f"数据获取失败: {error_msg}"
+    
+    return result
+
+
+# Alpha Vantage 数据接口函数
+def get_alpha_vantage_stock_data(
+    ticker: Annotated[str, "股票代码，如 'AAPL', 'TSLA' 等"],
+    curr_date: Annotated[str, "当前日期，格式为 yyyy-mm-dd"],
+    look_back_days: Annotated[int, "回溯天数，默认30天"] = 30
+) -> str:
+    """
+    获取 Alpha Vantage 股票数据
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        look_back_days: 回溯天数
+        
+    Returns:
+        str: 格式化的股票数据
+    """
+    from datetime import datetime, timedelta
+    
+    # 计算开始日期
+    end_date = datetime.strptime(curr_date, "%Y-%m-%d")
+    start_date = end_date - timedelta(days=look_back_days)
+    start_date_str = start_date.strftime("%Y-%m-%d")
+    
+    return get_stock_data_alpha_vantage(ticker, start_date_str, curr_date)
+
+
+def get_alpha_vantage_fundamentals(
+    ticker: Annotated[str, "股票代码，如 'AAPL', 'TSLA' 等"],
+    curr_date: Annotated[str, "当前日期，格式为 yyyy-mm-dd"]
+) -> str:
+    """
+    获取 Alpha Vantage 公司基本面数据
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        
+    Returns:
+        str: 格式化的基本面数据
+    """
+    return get_company_fundamentals_alpha_vantage(ticker)
+
+
+def get_alpha_vantage_technical_indicators(
+    ticker: Annotated[str, "股票代码，如 'AAPL', 'TSLA' 等"],
+    curr_date: Annotated[str, "当前日期，格式为 yyyy-mm-dd"],
+    indicator: Annotated[str, "技术指标类型，如 'SMA', 'EMA', 'RSI', 'MACD' 等"] = "SMA",
+    time_period: Annotated[int, "时间周期，默认20"] = 20
+) -> str:
+    """
+    获取 Alpha Vantage 技术指标数据
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        indicator: 技术指标类型
+        time_period: 时间周期
+        
+    Returns:
+        str: 格式化的技术指标数据
+    """
+    return get_technical_indicators_alpha_vantage(ticker, indicator, time_period)
+
+
+# Polygon 数据接口函数
+def get_polygon_stock_data(
+    ticker: Annotated[str, "股票代码，如 'AAPL', 'TSLA' 等"],
+    curr_date: Annotated[str, "当前日期，格式为 yyyy-mm-dd"],
+    look_back_days: Annotated[int, "回溯天数，默认30天"] = 30
+) -> str:
+    """
+    获取 Polygon 股票数据
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        look_back_days: 回溯天数
+        
+    Returns:
+        str: 格式化的股票数据
+    """
+    from datetime import datetime, timedelta
+    
+    # 计算开始日期
+    end_date = datetime.strptime(curr_date, "%Y-%m-%d")
+    start_date = end_date - timedelta(days=look_back_days)
+    start_date_str = start_date.strftime("%Y-%m-%d")
+    
+    return get_stock_data_polygon(ticker, start_date_str, curr_date)
+
+
+def get_polygon_company_news(
+    ticker: Annotated[str, "股票代码，如 'AAPL', 'TSLA' 等"],
+    curr_date: Annotated[str, "当前日期，格式为 yyyy-mm-dd"],
+    look_back_days: Annotated[int, "回溯天数，默认7天"] = 7,
+    limit: Annotated[int, "新闻数量限制，默认10条"] = 10
+) -> str:
+    """
+    获取 Polygon 公司新闻
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        look_back_days: 回溯天数
+        limit: 新闻数量限制
+        
+    Returns:
+        str: 格式化的新闻数据
+    """
+    from datetime import datetime, timedelta
+    
+    # 计算开始日期
+    end_date = datetime.strptime(curr_date, "%Y-%m-%d")
+    start_date = end_date - timedelta(days=look_back_days)
+    start_date_str = start_date.strftime("%Y-%m-%d")
+    
+    return get_company_news_polygon(ticker, start_date_str, curr_date, limit)
+
+
+def get_polygon_company_financials(
+    ticker: Annotated[str, "股票代码，如 'AAPL', 'TSLA' 等"],
+    curr_date: Annotated[str, "当前日期，格式为 yyyy-mm-dd"],
+    timeframe: Annotated[str, "时间框架，'annual' 或 'quarterly'"] = "annual"
+) -> str:
+    """
+    获取 Polygon 公司财务数据
+    
+    Args:
+        ticker: 股票代码
+        curr_date: 当前日期
+        timeframe: 时间框架
+        
+    Returns:
+        str: 格式化的财务数据
+    """
+    return get_company_financials_polygon(ticker, timeframe)
+
+
+def get_polygon_market_status(
+    curr_date: Annotated[str, "当前日期，格式为 yyyy-mm-dd"]
+) -> str:
+    """
+    获取 Polygon 市场状态
+    
+    Args:
+        curr_date: 当前日期
+        
+    Returns:
+        str: 格式化的市场状态
+    """
+    return get_market_status_polygon()

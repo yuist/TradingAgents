@@ -32,8 +32,10 @@ def create_social_media_analyst(llm, toolkit):
 
         # 根据配置选择在线或离线工具
         if toolkit.config["online_tools"]:
-            # 在线工具：获取实时社交媒体数据
-            tools = [toolkit.get_stock_news_openai]
+            # 在线模式：使用OpenAI股票新闻
+            tools = [
+                toolkit.get_stock_news_openai,  # OpenAI股票新闻分析
+            ]
         else:
             # 离线工具：使用缓存的社交媒体数据
             tools = [

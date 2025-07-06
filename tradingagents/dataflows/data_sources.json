@@ -1,0 +1,90 @@
+{
+  "health_check_interval": 300,
+  "retry_config": {
+    "max_retries": 3,
+    "initial_delay": 1,
+    "max_delay": 60,
+    "backoff_factor": 2
+  },
+  "data_sources": {
+    "yahoo_finance": {
+      "enabled": true,
+      "priority": 3,
+      "timeout": 15,
+      "rate_limit": {
+        "calls_per_minute": 200,
+        "calls_per_hour": 2000
+      }
+    },
+    "alpha_vantage": {
+      "enabled": true,
+      "priority": 1,
+      "api_key": "62LK3VFFI2LNRK0H",
+      "timeout": 30,
+      "rate_limit": {
+        "calls_per_minute": 5,
+        "calls_per_day": 500
+      }
+    },
+    "tushare": {
+      "enabled": true,
+      "priority": 1,
+      "token": "f9304c900ebfd9f49fcff38131e9c49ed86799ae519a5277208e57f5",
+      "timeout": 30,
+      "rate_limit": {
+        "calls_per_minute": 200,
+        "calls_per_day": 10000
+      }
+    },
+    "sina_finance": {
+      "enabled": true,
+      "priority": 1,
+      "timeout": 10,
+      "rate_limit": {
+        "calls_per_minute": 100
+      }
+    },
+    "polygon": {
+      "enabled": true,
+      "priority": 1,
+      "api_key": "z4L8E0pspcA2AAOhWfBhsYebHJfJkRrX",
+      "timeout": 30,
+      "rate_limit": {
+        "calls_per_minute": 5,
+        "calls_per_day": 1000
+      }
+    }
+  },
+  "market_preferences": {
+    "domestic": [
+      "sina_finance",
+      "tushare",
+      "yahoo_finance"
+    ],
+    "international": [
+      "alpha_vantage",
+      "polygon",
+      "yahoo_finance"
+    ],
+    "crypto": [
+      "alpha_vantage",
+      "polygon"
+    ]
+  },
+  "data_validation": {
+    "min_data_points": 1,
+    "max_price_change_percent": 50,
+    "required_columns": [
+      "Open",
+      "High",
+      "Low",
+      "Close"
+    ]
+  },
+  "fallback_strategy": {
+    "enable_cache": true,
+    "cache_duration_hours": 24,
+    "enable_partial_data": true,
+    "min_success_rate": 0.8
+  }
+}

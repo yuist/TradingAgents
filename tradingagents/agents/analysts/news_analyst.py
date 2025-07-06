@@ -31,8 +31,11 @@ def create_news_analyst(llm, toolkit):
 
         # 根据配置选择在线或离线工具
         if toolkit.config["online_tools"]:
-            # 在线工具：获取实时新闻
-            tools = [toolkit.get_global_news_openai, toolkit.get_google_news]
+            # 在线模式：使用OpenAI全球新闻和Google新闻
+            tools = [
+                toolkit.get_global_news_openai,  # OpenAI全球新闻分析
+                toolkit.get_google_news,  # Google新闻搜索
+            ]
         else:
             # 离线工具：使用缓存的新闻数据
             tools = [

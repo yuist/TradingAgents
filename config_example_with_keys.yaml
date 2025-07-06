@@ -1,0 +1,132 @@
+# TradingAgents 配置文件示例
+# 复制此文件为 config.yaml 并填入您的 API 密钥
+
+api_keys:
+  # OpenAI API 密钥 (用于 GPT 模型)
+  openai: 'your-openai-api-key-here'
+  # Anthropic API 密钥 (用于 Claude 模型)
+  anthropic: 'your-anthropic-api-key-here'
+  # Google API 密钥 (用于 Gemini 模型)
+  google: 'your-google-api-key-here'
+  # OpenRouter API 密钥 (用于多种模型)
+  openrouter: 'your-openrouter-api-key-here'
+  # DeepSeek API 密钥
+  deepseek: 'your-deepseek-api-key-here'
+  # Qwen API 密钥
+  qwen: 'your-qwen-api-key-here'
+
+# LLM 提供商配置
+llm_providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    models:
+      deep:
+        - gpt-4
+        - gpt-4o
+        - gpt-4-turbo
+        - gpt-4o-mini
+      quick:
+        - gpt-3.5-turbo
+        - gpt-4o-mini
+  
+  anthropic:
+    base_url: https://api.anthropic.com
+    models:
+      deep:
+        - claude-2.1
+        - claude-3-opus
+        - claude-3-sonnet
+      quick:
+        - claude-instant-1.2
+        - claude-3-haiku
+  
+  google:
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    models:
+      deep:
+        - gemini-2.5-pro        
+      quick:
+        - gemini-2.5-flash
+  
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    models:
+      deep:
+        - openai/gpt-4o
+        - openai/gpt-4-turbo
+        - anthropic/claude-3-opus
+        - google/gemini-pro
+      quick:
+        - openai/gpt-4o-mini
+        - openai/gpt-3.5-turbo
+        - anthropic/claude-3-haiku
+  
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    models:
+      deep:
+        - deepseek-chat
+        - deepseek-coder
+      quick:
+        - deepseek-chat
+  
+  qwen:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    models:
+      deep:
+        - qwen-turbo
+        - qwen-plus
+        - qwen-max
+        - qwen2.5-72b-instruct
+        - qwen2.5-32b-instruct
+      quick:
+        - qwen-turbo
+        - qwen2.5-7b-instruct
+        - qwen2.5-14b-instruct
+
+# 模型配置 - 这些是默认使用的模型
+models:
+  # 默认 LLM 提供商 (推荐使用 gpt-4o-mini 以节省成本)
+  llm_provider: openai
+  # 深度思考模型 (用于复杂分析)
+  deep_think_llm: gpt-4o-mini
+  # 快速思考模型 (用于快速任务)
+  quick_think_llm: gpt-4o-mini
+
+  # 其他提供商配置示例:
+  # llm_provider: google
+  # deep_think_llm: gemini-2.5-pro
+  # quick_think_llm: gemini-2.5-flash
+
+  # llm_provider: openrouter
+  # deep_think_llm: openai/gpt-4o-mini
+  # quick_think_llm: openai/gpt-4o-mini
+
+  # llm_provider: deepseek
+  # deep_think_llm: deepseek-chat
+  # quick_think_llm: deepseek-chat
+
+  # llm_provider: qwen
+  # deep_think_llm: qwen-max
+  # quick_think_llm: qwen-turbo
+
+# 系统配置
+system:
+  # 项目根目录
+  project_dir: D:\ccode\TradingAgents
+  # 结果输出目录
+  results_dir: ./results
+  # 数据缓存目录
+  data_dir: ./data
+  # 最大辩论轮数
+  max_debate_rounds: 2
+  # 最大风险讨论轮数
+  max_risk_discuss_rounds: 1
+  # 是否启用在线工具
+  online_tools: true
+
+# 使用说明:
+# 1. 将此文件复制为 config.yaml
+# 2. 在 api_keys 部分填入您的 API 密钥
+# 3. 根据需要调整 models 部分的默认模型
+# 4. 运行 python -m cli.main 时将自动使用这些配置

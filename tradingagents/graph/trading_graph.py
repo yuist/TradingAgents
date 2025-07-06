@@ -13,6 +13,11 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+# 导入新的配置管理和 LLM 工厂
+from ..config_manager import get_config_manager, ConfigManager
+from ..llm_factory import get_llm_factory, LLMFactory
+from ..utils.logging_manager import LoggerManager
+
 # LangGraph 工具节点，用于执行具体的数据获取任务
 from langgraph.prebuilt import ToolNode
 
@@ -27,7 +32,7 @@ from tradingagents.agents.utils.agent_states import (
     InvestDebateState,
     RiskDebateState,
 )
-from tradingagents.dataflows.interface import set_config
+# 移除对旧配置系统的依赖，现在使用主配置管理器
 
 # 导入图相关的各个组件
 from .conditional_logic import ConditionalLogic  # 条件逻辑处理
@@ -53,6 +58,8 @@ class TradingAgentsGraph:
         selected_analysts=["market", "social", "news", "fundamentals"],
         debug=False,
         config: Dict[str, Any] = None,
+        config_path: str = None,
+        debug_log_file: str = None,
     ):
         """
         初始化交易智能体图和相关组件
@@ -64,13 +71,18 @@ class TradingAgentsGraph:
                 - news: 新闻分析师（分析全球新闻和宏观经济指标）
                 - fundamentals: 基本面分析师（分析公司财务和业绩）
             debug: 是否开启调试模式（会输出详细的执行过程）
-            config: 配置字典。如果为 None，使用默认配置
+            config: 配置字典。如果为 None，使用默认配置（向后兼容）
+            config_path: 配置文件路径。如果提供，将使用新的配置系统
+            debug_log_file: 调试日志文件路径。如果为 None，将使用默认路径
         """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
+        self.config_path = config_path
+        self.debug_log_file = debug_log_file or os.path.join(
+            (config or DEFAULT_CONFIG).get("project_dir", "."), "logs", "debug_messages.log"
+        )
 
-        # 更新数据流接口的配置
-        set_config(self.config)
+        # 注意：不再需要更新数据流接口配置，因为现在使用主配置管理器
 
         # 创建必要的目录结构
         # 用于存储数据缓存
@@ -79,33 +91,55 @@ class TradingAgentsGraph:
             exist_ok=True,
         )
 
+        # 初始化配置管理器和 LLM 工厂
+        # 支持新的配置系统和多种 LLM 提供商
+        self.config_manager = self._setup_config_manager()
+        self.llm_factory = get_llm_factory(self.config_manager)
+        
+        # 初始化统一日志管理器
+        self.logger_manager = LoggerManager()
+        self.logger = self.logger_manager.get_logger('trading')
+        
+        # 获取 LLM 配置
+        llm_config = self.config_manager.get_llm_config()
+        
         # 初始化大语言模型（LLMs）
-        # 根据配置选择不同的 LLM 提供商
-        if self.config["llm_provider"].lower() == "openai" or self.config["llm_provider"] == "ollama" or self.config["llm_provider"] == "openrouter":
-            # OpenAI 系列模型配置
-            self.deep_thinking_llm = ChatOpenAI(model=self.config["deep_think_llm"], base_url=self.config["backend_url"])
-            self.quick_thinking_llm = ChatOpenAI(model=self.config["quick_think_llm"], base_url=self.config["backend_url"])
-        elif self.config["llm_provider"].lower() == "anthropic":
-            # Anthropic Claude 系列模型配置
-            self.deep_thinking_llm = ChatAnthropic(model=self.config["deep_think_llm"], base_url=self.config["backend_url"])
-            self.quick_thinking_llm = ChatAnthropic(model=self.config["quick_think_llm"], base_url=self.config["backend_url"])
-        elif self.config["llm_provider"].lower() == "google":
-            # Google Gemini 系列模型配置
-            self.deep_thinking_llm = ChatGoogleGenerativeAI(model=self.config["deep_think_llm"])
-            self.quick_thinking_llm = ChatGoogleGenerativeAI(model=self.config["quick_think_llm"])
-        else:
-            raise ValueError(f"不支持的 LLM 提供商: {self.config['llm_provider']}")
+        # 使用 LLM 工厂创建实例，支持更多提供商
+        try:
+            self.deep_thinking_llm = self.llm_factory.create_llm(
+                provider=llm_config.provider,
+                model_name=llm_config.deep_think_model
+            )
+            
+            self.quick_thinking_llm = self.llm_factory.create_llm(
+                provider=llm_config.provider,
+                model_name=llm_config.quick_think_model
+            )
+            
+            if self.debug:
+                print(f"✅ 成功初始化 LLM:")
+                print(f"   提供商: {llm_config.provider}")
+                print(f"   深度思考模型: {llm_config.deep_think_model}")
+                print(f"   快速思考模型: {llm_config.quick_think_model}")
+                
+        except Exception as e:
+            print(f"❌ LLM 初始化失败: {e}")
+            print(f"   请检查配置文件和 API 密钥设置")
+            raise
         
         # 初始化工具包，包含所有数据获取和分析工具
         self.toolkit = Toolkit(config=self.config)
 
         # 初始化记忆存储
         # 每个关键智能体都有自己的记忆，用于存储历史经验
-        self.bull_memory = FinancialSituationMemory("bull_memory", self.config)  # 看涨研究员记忆
-        self.bear_memory = FinancialSituationMemory("bear_memory", self.config)  # 看跌研究员记忆
-        self.trader_memory = FinancialSituationMemory("trader_memory", self.config)  # 交易员记忆
-        self.invest_judge_memory = FinancialSituationMemory("invest_judge_memory", self.config)  # 投资裁判记忆
-        self.risk_manager_memory = FinancialSituationMemory("risk_manager_memory", self.config)  # 风险管理记忆
+        # FinancialSituationMemory现在会自动从ConfigManager获取嵌入配置
+        memory_config = {}  # 空配置，FinancialSituationMemory会自动处理
+        
+        self.bull_memory = FinancialSituationMemory("bull_memory", memory_config)  # 看涨研究员记忆
+        self.bear_memory = FinancialSituationMemory("bear_memory", memory_config)  # 看跌研究员记忆
+        self.trader_memory = FinancialSituationMemory("trader_memory", memory_config)  # 交易员记忆
+        self.invest_judge_memory = FinancialSituationMemory("invest_judge_memory", memory_config)  # 投资裁判记忆
+        self.risk_manager_memory = FinancialSituationMemory("risk_manager_memory", memory_config)  # 风险管理记忆
 
         # 创建工具节点
         # 每个节点对应一种数据源或分析类型
@@ -162,7 +196,8 @@ class TradingAgentsGraph:
             "social": ToolNode(
                 [
                     # 在线工具
-                    self.toolkit.get_stock_news_openai,  # OpenAI 股票新闻分析
+                    self.toolkit.get_stock_news_openai,  # OpenAI 股票新闻
+                    self.toolkit.get_google_news,  # Google 新闻
                     # 离线工具
                     self.toolkit.get_reddit_stock_info,  # Reddit 股票讨论数据
                 ]
@@ -170,7 +205,7 @@ class TradingAgentsGraph:
             "news": ToolNode(
                 [
                     # 在线工具
-                    self.toolkit.get_global_news_openai,  # OpenAI 全球新闻分析
+                    self.toolkit.get_global_news_openai,  # OpenAI 全球新闻
                     self.toolkit.get_google_news,  # Google 新闻
                     # 离线工具
                     self.toolkit.get_finnhub_news,  # Finnhub 新闻数据
@@ -191,6 +226,29 @@ class TradingAgentsGraph:
             ),
         }
 
+    def _normalize_ticker(self, ticker):
+        """标准化股票代码格式，避免重复文件夹问题。
+        
+        Args:
+            ticker: 原始股票代码
+            
+        Returns:
+            标准化后的股票代码
+        """
+        import re
+        ticker = ticker.upper().strip()
+        
+        # 检测中国股票代码（6位数字）
+        if re.match(r'^\d{6}$', ticker):
+            # 纯6位数字，直接返回（不添加后缀）
+            return ticker
+        elif re.match(r'^\d{6}\.(SZ|sz|SH|sh)$', ticker):
+            # 6位数字+交易所后缀，移除后缀统一格式
+            return ticker[:6]
+        else:
+            # 其他格式（如美股），直接返回
+            return ticker
+
     def propagate(self, company_name, trade_date):
         """
         运行交易智能体图，为特定公司在特定日期生成交易决策
@@ -209,23 +267,31 @@ class TradingAgentsGraph:
         Returns:
             (final_state, decision): 最终状态和处理后的交易决策
         """
-        self.ticker = company_name
+        # 标准化股票代码格式
+        normalized_company_name = self._normalize_ticker(company_name)
+        if normalized_company_name != company_name:
+            print(f"股票代码已标准化: {company_name} -> {normalized_company_name}")
+        
+        self.ticker = normalized_company_name
 
         # 初始化智能体状态
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date
+            normalized_company_name, trade_date
         )
         args = self.propagator.get_graph_args()
 
         if self.debug:
             # 调试模式：逐步跟踪执行过程
             trace = []
+            # 确保调试日志目录存在
+            os.makedirs(os.path.dirname(self.debug_log_file), exist_ok=True)
+            
             for chunk in self.graph.stream(init_agent_state, **args):
                 if len(chunk["messages"]) == 0:
                     pass
                 else:
-                    # 打印每个智能体的输出
-                    chunk["messages"][-1].pretty_print()
+                    # 将智能体输出写入日志文件而不是终端
+                    self._log_debug_message(chunk["messages"][-1])
                     trace.append(chunk)
 
             final_state = trace[-1]
@@ -242,6 +308,59 @@ class TradingAgentsGraph:
         # 返回决策和处理后的信号
         return final_state, self.process_signal(final_state["final_trade_decision"])
 
+    def _log_debug_message(self, message):
+        """
+        将调试消息写入日志文件
+        
+        Args:
+            message: 要记录的消息对象
+        """
+        import io
+        from contextlib import redirect_stdout
+        
+        try:
+            # 捕获 pretty_print() 的输出
+            output_buffer = io.StringIO()
+            with redirect_stdout(output_buffer):
+                message.pretty_print()
+            
+            # 获取输出内容
+            message_content = output_buffer.getvalue()
+            
+            # 使用统一日志管理器记录调试消息
+            self.logger.debug(
+                "Trading graph debug message",
+                extra={
+                    'message_content': message_content,
+                    'message_type': type(message).__name__,
+                    'component': 'trading_graph'
+                }
+            )
+            
+            # 保持向后兼容，继续写入传统日志文件
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"[{timestamp}] {message_content}\n"
+            
+            # 确保调试日志目录存在
+            os.makedirs(os.path.dirname(self.debug_log_file), exist_ok=True)
+            
+            with open(self.debug_log_file, "a", encoding="utf-8") as f:
+                f.write(log_entry)
+                f.write("-" * 80 + "\n")  # 分隔线
+                
+        except Exception as e:
+            # 使用统一日志管理器记录错误
+            self.logger.error(
+                f"调试日志记录失败: {e}",
+                extra={
+                    'error_type': type(e).__name__,
+                    'component': 'trading_graph'
+                }
+            )
+            # 回退到终端输出
+            message.pretty_print()
+    
     def _log_state(self, trade_date, final_state):
         """
         将最终状态记录到 JSON 文件
@@ -252,7 +371,7 @@ class TradingAgentsGraph:
         - 交易决策
         - 风险评估
         """
-        self.log_states_dict[str(trade_date)] = {
+        state_data = {
             "company_of_interest": final_state["company_of_interest"],  # 目标公司
             "trade_date": final_state["trade_date"],  # 交易日期
             "market_report": final_state["market_report"],  # 市场分析报告
@@ -281,16 +400,49 @@ class TradingAgentsGraph:
             "investment_plan": final_state["investment_plan"],  # 投资计划
             "final_trade_decision": final_state["final_trade_decision"],  # 最终交易决策
         }
+        
+        self.log_states_dict[str(trade_date)] = state_data
+        
+        # 使用统一日志管理器记录状态信息
+        self.logger.info(
+            f"Trading state logged for {trade_date}",
+            extra={
+                'trade_date': str(trade_date),
+                'company': final_state["company_of_interest"],
+                'final_decision': final_state["final_trade_decision"],
+                'component': 'trading_graph',
+                'action': 'state_logging'
+            }
+        )
 
         # 保存到文件
         directory = Path(f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/")
         directory.mkdir(parents=True, exist_ok=True)
 
-        with open(
-            f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/full_states_log_{trade_date}.json",
-            "w",
-        ) as f:
-            json.dump(self.log_states_dict, f, indent=4)
+        try:
+            with open(
+                f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/full_states_log_{trade_date}.json",
+                "w",
+            ) as f:
+                json.dump(self.log_states_dict, f, indent=4)
+                
+            self.logger.debug(
+                f"State file saved successfully for {trade_date}",
+                extra={
+                    'trade_date': str(trade_date),
+                    'file_path': f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/full_states_log_{trade_date}.json",
+                    'component': 'trading_graph'
+                }
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Failed to save state file for {trade_date}: {e}",
+                extra={
+                    'trade_date': str(trade_date),
+                    'error_type': type(e).__name__,
+                    'component': 'trading_graph'
+                }
+            )
 
     def reflect_and_remember(self, returns_losses):
         """
@@ -335,6 +487,40 @@ class TradingAgentsGraph:
             full_signal: 完整的交易决策文本
             
         Returns:
-            处理后的简化交易信号
+            str: 处理后的核心决策（"BUY", "SELL", "HOLD"）
         """
         return self.signal_processor.process_signal(full_signal)
+    
+    def _setup_config_manager(self) -> ConfigManager:
+        """
+        设置配置管理器
+        
+        Returns:
+            ConfigManager: 配置管理器实例
+        """
+        if self.config_path and self.config and self.config != DEFAULT_CONFIG:
+            # 同时提供了配置文件路径和配置字典
+            # 先从配置文件加载，然后用配置字典覆盖
+            config_manager = ConfigManager(self.config_path)
+            # 将传入的配置应用到配置管理器
+            legacy_config = ConfigManager.from_legacy_config(self.config)
+            # 合并LLM配置
+            if "llm_provider" in self.config:
+                # 从传入的配置获取LLM设置
+                llm_config = legacy_config.get_llm_config()
+                # 更新到配置管理器
+                config_manager.config["llm"]["provider"] = llm_config.provider
+                config_manager.config["llm"]["quick_think_model"] = llm_config.quick_think_model
+                config_manager.config["llm"]["deep_think_model"] = llm_config.deep_think_model
+                if llm_config.base_url:
+                    config_manager.config["llm"]["base_url"] = llm_config.base_url
+            return config_manager
+        elif self.config_path:
+            # 使用指定的配置文件路径
+            return ConfigManager(self.config_path)
+        elif self.config and self.config != DEFAULT_CONFIG:
+            # 使用传统配置字典（向后兼容）
+            return ConfigManager.from_legacy_config(self.config)
+        else:
+            # 使用默认配置文件
+            return get_config_manager()

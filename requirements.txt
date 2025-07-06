@@ -1,26 +1,51 @@
 typing-extensions
+# 核心 LangChain 包
 langchain-openai
 langchain-experimental
+langchain_anthropic
+langchain-google-genai
+
+# 新增 LLM 提供商支持
+# 注意：某些提供商可能使用 OpenAI 兼容接口，无需额外包
+
+# 配置管理
+pyyaml>=6.0
+
+# 数据处理和分析
 pandas
 yfinance
-praw
-feedparser
 stockstats
-eodhd
-langgraph
-chromadb
-setuptools
-backtrader
 akshare
 tushare
+
+# 金融数据 API
 finnhub-python
+eodhd
+alpha-vantage
+polygon-api-client
+
+# 社交媒体和新闻
+praw
+feedparser
 parsel
 requests
-tqdm
-pytz
-redis
+
+# 图和工作流
+langgraph
+
+# 向量数据库和记忆
+chromadb
+
+# 回测和交易
+backtrader
+
+# 用户界面
 chainlit
 rich
 questionary
-langchain_anthropic
-langchain-google-genai
+
+# 工具和实用程序
+setuptools
+tqdm
+pytz
+redis

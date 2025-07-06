@@ -19,9 +19,16 @@ from rich.tree import Tree
 from rich import box
 from rich.align import Align
 from rich.rule import Rule
+import sys
+
+# Add the project root to Python path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.config_manager import get_config_manager
+from tradingagents.utils.logging_manager import LoggerManager
+import os
 from cli.models import AnalystType
 from cli.utils import *
 
@@ -394,8 +401,20 @@ def update_display(layout, spinner_text=None):
 def get_user_selections():
     """Get all user selections before starting the analysis display."""
     # Display ASCII art welcome message
-    with open("./cli/static/welcome.txt", "r") as f:
+    with open("./cli/static/welcome.txt", "r", encoding="utf-8") as f:
         welcome_ascii = f.read()
+        
+    # 检查是否存在配置文件
+    config_path = "config.yaml"
+    config_exists = os.path.exists(config_path)
+    config_manager = None
+    llm_config = None
+    
+    if config_exists:
+        # 加载配置文件以获取默认值
+        from tradingagents.config_manager import ConfigManager
+        config_manager = ConfigManager(config_path)
+        llm_config = config_manager.get_llm_config()
 
     # Create welcome box content
     welcome_content = f"{welcome_ascii}\n"
@@ -462,39 +481,101 @@ def get_user_selections():
         )
     )
     selected_research_depth = select_research_depth()
-
-    # Step 5: OpenAI backend
-    console.print(
-        create_question_box(
-            "Step 5: OpenAI backend", "Select which service to talk to"
-        )
-    )
-    selected_llm_provider, backend_url = select_llm_provider()
     
-    # Step 6: Thinking agents
-    console.print(
-        create_question_box(
-            "Step 6: Thinking Agents", "Select your thinking agents for analysis"
+    # 如果存在配置文件，直接使用配置文件中的LLM设置
+    if config_exists and llm_config:
+        # 直接使用配置文件中的LLM设置
+        console.print(
+            create_question_box(
+                "LLM配置", 
+                f"使用配置文件中的LLM设置:\n提供商: {llm_config.provider}\n深度思考模型: {llm_config.deep_think_model}\n快速思考模型: {llm_config.quick_think_model}"
+            )
         )
-    )
-    selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
-    selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
+        
+        console.print(f"[green]使用配置文件中的LLM设置:[/green]")
+        console.print(f"[green]- 提供商:[/green] {llm_config.provider}")
+        console.print(f"[green]- 深度思考模型:[/green] {llm_config.deep_think_model}")
+        console.print(f"[green]- 快速思考模型:[/green] {llm_config.quick_think_model}")
+        
+        # 构建返回结果（不包含LLM相关键，直接使用配置文件）
+        result = {
+            "ticker": selected_ticker,
+            "analysis_date": analysis_date,
+            "analysts": selected_analysts,
+            "research_depth": selected_research_depth,
+        }
+    else:
+        # 没有配置文件时，手动选择LLM设置
+        # Step 5: LLM提供商
+        console.print(
+            create_question_box(
+                "Step 5: LLM提供商", "选择要使用的LLM服务"
+            )
+        )
+        selected_llm_provider, backend_url = select_llm_provider()
+        
+        # Step 6: 思考代理
+        console.print(
+            create_question_box(
+                "Step 6: 思考代理", "选择用于分析的思考代理"
+            )
+        )
+        selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
+        selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
+        
+        # 构建返回结果（包含手动选择的LLM设置）
+        result = {
+            "ticker": selected_ticker,
+            "analysis_date": analysis_date,
+            "analysts": selected_analysts,
+            "research_depth": selected_research_depth,
+            "llm_provider": selected_llm_provider.lower(),
+            "backend_url": backend_url,
+            "shallow_thinker": selected_shallow_thinker,
+            "deep_thinker": selected_deep_thinker,
+        }
+    
+    return result
 
-    return {
-        "ticker": selected_ticker,
-        "analysis_date": analysis_date,
-        "analysts": selected_analysts,
-        "research_depth": selected_research_depth,
-        "llm_provider": selected_llm_provider.lower(),
-        "backend_url": backend_url,
-        "shallow_thinker": selected_shallow_thinker,
-        "deep_thinker": selected_deep_thinker,
-    }
+
+def normalize_ticker(ticker):
+    """标准化股票代码格式，避免重复文件夹问题。
+    
+    Args:
+        ticker: 原始股票代码
+        
+    Returns:
+        标准化后的股票代码
+    """
+    ticker = ticker.upper().strip()
+    
+    # 检测中国股票代码（6位数字）
+    import re
+    if re.match(r'^\d{6}$', ticker):
+        # 纯6位数字，直接返回（不添加后缀）
+        return ticker
+    elif re.match(r'^\d{6}\.(SZ|sz|SH|sh)$', ticker):
+        # 6位数字+交易所后缀，移除后缀统一格式
+        return ticker[:6]
+    else:
+        # 其他格式（如美股），直接返回
+        return ticker
 
 
 def get_ticker():
     """Get ticker symbol from user input."""
-    return typer.prompt("", default="SPY")
+    import re
+    while True:
+        ticker = typer.prompt("", default="SPY")
+        # 验证ticker格式：只允许字母、数字、点号和连字符
+        if re.match(r'^[A-Za-z0-9.-]+$', ticker):
+            # 标准化股票代码格式
+            normalized_ticker = normalize_ticker(ticker)
+            if normalized_ticker != ticker.upper():
+                console.print(f"[yellow]Info: Ticker standardized from '{ticker}' to '{normalized_ticker}'[/yellow]")
+            return normalized_ticker
+        else:
+            console.print("[red]Error: Invalid ticker symbol. Please use only letters, numbers, dots, and hyphens.[/red]")
 
 
 def get_analysis_date():
@@ -735,27 +816,117 @@ def run_analysis():
     # First get all user selections
     selections = get_user_selections()
 
-    # Create config with selected research depth
-    config = DEFAULT_CONFIG.copy()
-    config["max_debate_rounds"] = selections["research_depth"]
-    config["max_risk_discuss_rounds"] = selections["research_depth"]
-    config["quick_think_llm"] = selections["shallow_thinker"]
-    config["deep_think_llm"] = selections["deep_thinker"]
-    config["backend_url"] = selections["backend_url"]
-    config["llm_provider"] = selections["llm_provider"].lower()
+    # 检查是否存在配置文件
+    config_path = "config.yaml"
+    if os.path.exists(config_path):
+        # 使用配置文件初始化
+        from tradingagents.config_manager import ConfigManager
+        config_manager = ConfigManager(config_path)
+        
+        # 从配置文件获取基础配置
+        config = DEFAULT_CONFIG.copy()
+        
+        # 使用用户选择覆盖配置文件中的设置
+        config["max_debate_rounds"] = selections["research_depth"]
+        config["max_risk_discuss_rounds"] = selections["research_depth"]
+        
+        # 如果用户手动选择了LLM设置，则覆盖配置文件中的设置
+        # 这些值会通过TradingAgentsGraph的初始化传递给ConfigManager
+        temp_config = None
+        if "llm_provider" in selections and "shallow_thinker" in selections and "deep_thinker" in selections:
+            temp_config = config.copy()
+            temp_config["llm_provider"] = selections["llm_provider"].lower()
+            temp_config["quick_think_llm"] = selections["shallow_thinker"]
+            temp_config["deep_think_llm"] = selections["deep_thinker"]
+            temp_config["backend_url"] = selections["backend_url"]
+    else:
+        # 传统配置方式（向后兼容）
+        config = DEFAULT_CONFIG.copy()
+        config["max_debate_rounds"] = selections["research_depth"]
+        config["max_risk_discuss_rounds"] = selections["research_depth"]
+        config["quick_think_llm"] = selections["shallow_thinker"]
+        config["deep_think_llm"] = selections["deep_thinker"]
+        config["backend_url"] = selections["backend_url"]
+        config["llm_provider"] = selections["llm_provider"].lower()
+        temp_config = None
 
-    # Initialize the graph
-    graph = TradingAgentsGraph(
-        [analyst.value for analyst in selections["analysts"]], config=config, debug=True
-    )
-
-    # Create result directory
+    # Create result directory first (before using results_dir)
     results_dir = Path(config["results_dir"]) / selections["ticker"] / selections["analysis_date"]
     results_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Now initialize the graph with the correct debug_log_file path
+    debug_log_file = results_dir / "debug_messages.log"
+    
+    if os.path.exists(config_path):
+        # 初始化图（使用配置文件）
+        graph = TradingAgentsGraph(
+            selected_analysts=[analyst.value for analyst in selections["analysts"]],
+            debug=True,
+            config_path=config_path,
+            config=temp_config,  # 如果用户手动选择了LLM，则传递临时配置
+            debug_log_file=str(debug_log_file)
+        )
+    else:
+        # 初始化图（使用传统配置）
+        graph = TradingAgentsGraph(
+            selected_analysts=[analyst.value for analyst in selections["analysts"]],
+            debug=True,
+            config=config,
+            debug_log_file=str(debug_log_file)
+        )
+
+    # Create additional directories
     report_dir = results_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     log_file = results_dir / "message_tool.log"
     log_file.touch(exist_ok=True)
+    
+    # 初始化统一日志管理器
+    config_manager = get_config_manager()
+    logging_config = config_manager.get_logging_config()
+    logger_manager = LoggerManager(logging_config)
+    
+    # 获取CLI专用日志器
+    cli_logger = logger_manager.get_logger('cli')
+    
+    # 创建调试消息记录函数
+    def log_debug_message(msg_type, content, agent_name=None):
+        """记录详细的调试消息"""
+        # 格式化消息内容
+        if isinstance(content, list):
+            # 处理复杂的消息格式
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get('type') == 'text':
+                        text_parts.append(item.get('text', ''))
+                    elif item.get('type') == 'tool_use':
+                        text_parts.append(f"[Tool: {item.get('name', 'unknown')}]")
+                else:
+                    text_parts.append(str(item))
+            content_str = ' '.join(text_parts)
+        else:
+            content_str = str(content)
+        
+        # 使用统一日志管理器记录
+        extra_data = {
+            'message_type': msg_type,
+            'agent_name': agent_name,
+            'content_length': len(content_str)
+        }
+        
+        if agent_name:
+            extra_data['agent'] = agent_name
+        
+        # 根据消息类型选择日志级别
+        if msg_type == "System":
+            cli_logger.info(f"[{msg_type}] {content_str}", extra=extra_data)
+        elif msg_type == "Reasoning":
+            cli_logger.debug(f"[{msg_type}] {content_str}", extra=extra_data)
+        elif msg_type == "Tool":
+            cli_logger.info(f"[{msg_type}] {content_str}", extra=extra_data)
+        else:
+            cli_logger.debug(f"[{msg_type}] {content_str}", extra=extra_data)
 
     def save_message_decorator(obj, func_name):
         func = getattr(obj, func_name)
@@ -763,9 +934,21 @@ def run_analysis():
         def wrapper(*args, **kwargs):
             func(*args, **kwargs)
             timestamp, message_type, content = obj.messages[-1]
-            content = content.replace("\n", " ")  # Replace newlines with spaces
-            with open(log_file, "a") as f:
-                f.write(f"{timestamp} [{message_type}] {content}\n")
+            
+            # 使用统一日志管理器记录消息
+            extra_data = {
+                'timestamp': timestamp,
+                'message_type': message_type,
+                'source': 'cli_message_buffer'
+            }
+            
+            # 记录到详细调试日志
+            log_debug_message(message_type, content)
+            
+            # 同时记录到传统日志文件以保持兼容性
+            content_simple = content.replace("\n", " ") if isinstance(content, str) else str(content)
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"{timestamp} [{message_type}] {content_simple}\n")
         return wrapper
     
     def save_tool_call_decorator(obj, func_name):
@@ -773,9 +956,21 @@ def run_analysis():
         @wraps(func)
         def wrapper(*args, **kwargs):
             func(*args, **kwargs)
-            timestamp, tool_name, args = obj.tool_calls[-1]
-            args_str = ", ".join(f"{k}={v}" for k, v in args.items())
-            with open(log_file, "a") as f:
+            timestamp, tool_name, tool_args = obj.tool_calls[-1]
+            
+            # 使用统一日志管理器记录工具调用
+            extra_data = {
+                'timestamp': timestamp,
+                'tool_name': tool_name,
+                'tool_args': tool_args,
+                'source': 'cli_tool_call'
+            }
+            
+            args_str = ", ".join(f"{k}={v}" for k, v in tool_args.items()) if isinstance(tool_args, dict) else str(tool_args)
+            cli_logger.info(f"Tool Call: {tool_name}({args_str})", extra=extra_data)
+            
+            # 同时记录到传统日志文件以保持兼容性
+            with open(log_file, "a", encoding="utf-8") as f:
                 f.write(f"{timestamp} [Tool Call] {tool_name}({args_str})\n")
         return wrapper
 
@@ -788,7 +983,7 @@ def run_analysis():
                 content = obj.report_sections[section_name]
                 if content:
                     file_name = f"{section_name}.md"
-                    with open(report_dir / file_name, "w") as f:
+                    with open(report_dir / file_name, "w", encoding="utf-8") as f:
                         f.write(content)
         return wrapper
 
@@ -844,6 +1039,9 @@ def run_analysis():
         # Stream the analysis
         trace = []
         for chunk in graph.graph.stream(init_agent_state, **args):
+            # 记录chunk的详细信息到调试日志
+            log_debug_message("Chunk", f"Processing chunk with keys: {list(chunk.keys())}")
+            
             if len(chunk["messages"]) > 0:
                 # Get the last message from the chunk
                 last_message = chunk["messages"][-1]
@@ -855,6 +1053,9 @@ def run_analysis():
                 else:
                     content = str(last_message)
                     msg_type = "System"
+
+                # 记录原始消息到调试日志
+                log_debug_message(f"Raw_{msg_type}", last_message)
 
                 # Add message to buffer
                 message_buffer.add_message(msg_type, content)                
@@ -873,39 +1074,46 @@ def run_analysis():
                 # Update reports and agent status based on chunk content
                 # Analyst Team Reports
                 if "market_report" in chunk and chunk["market_report"]:
+                    log_debug_message("Agent_Status", "Market Analyst completed, updating report")
                     message_buffer.update_report_section(
                         "market_report", chunk["market_report"]
                     )
                     message_buffer.update_agent_status("Market Analyst", "completed")
                     # Set next analyst to in_progress
                     if "social" in selections["analysts"]:
+                        log_debug_message("Agent_Status", "Starting Social Analyst")
                         message_buffer.update_agent_status(
                             "Social Analyst", "in_progress"
                         )
 
                 if "sentiment_report" in chunk and chunk["sentiment_report"]:
+                    log_debug_message("Agent_Status", "Social Analyst completed, updating sentiment report")
                     message_buffer.update_report_section(
                         "sentiment_report", chunk["sentiment_report"]
                     )
                     message_buffer.update_agent_status("Social Analyst", "completed")
                     # Set next analyst to in_progress
                     if "news" in selections["analysts"]:
+                        log_debug_message("Agent_Status", "Starting News Analyst")
                         message_buffer.update_agent_status(
                             "News Analyst", "in_progress"
                         )
 
                 if "news_report" in chunk and chunk["news_report"]:
+                    log_debug_message("Agent_Status", "News Analyst completed, updating news report")
                     message_buffer.update_report_section(
                         "news_report", chunk["news_report"]
                     )
                     message_buffer.update_agent_status("News Analyst", "completed")
                     # Set next analyst to in_progress
                     if "fundamentals" in selections["analysts"]:
+                        log_debug_message("Agent_Status", "Starting Fundamentals Analyst")
                         message_buffer.update_agent_status(
                             "Fundamentals Analyst", "in_progress"
                         )
 
                 if "fundamentals_report" in chunk and chunk["fundamentals_report"]:
+                    log_debug_message("Agent_Status", "Fundamentals Analyst completed, starting research team")
                     message_buffer.update_report_section(
                         "fundamentals_report", chunk["fundamentals_report"]
                     )
@@ -913,6 +1121,7 @@ def run_analysis():
                         "Fundamentals Analyst", "completed"
                     )
                     # Set all research team members to in_progress
+                    log_debug_message("Agent_Status", "Starting research team debate")
                     update_research_team_status("in_progress")
 
                 # Research Team - Handle Investment Debate State
@@ -921,15 +1130,18 @@ def run_analysis():
                     and chunk["investment_debate_state"]
                 ):
                     debate_state = chunk["investment_debate_state"]
+                    log_debug_message("Investment_Debate", f"Processing debate state with keys: {list(debate_state.keys())}")
 
                     # Update Bull Researcher status and report
                     if "bull_history" in debate_state and debate_state["bull_history"]:
+                        log_debug_message("Bull_Researcher", "Processing bull researcher response")
                         # Keep all research team members in progress
                         update_research_team_status("in_progress")
                         # Extract latest bull response
                         bull_responses = debate_state["bull_history"].split("\n")
                         latest_bull = bull_responses[-1] if bull_responses else ""
                         if latest_bull:
+                            log_debug_message("Bull_Researcher", latest_bull)
                             message_buffer.add_message("Reasoning", latest_bull)
                             # Update research report with bull's latest analysis
                             message_buffer.update_report_section(
@@ -939,12 +1151,14 @@ def run_analysis():
 
                     # Update Bear Researcher status and report
                     if "bear_history" in debate_state and debate_state["bear_history"]:
+                        log_debug_message("Bear_Researcher", "Processing bear researcher response")
                         # Keep all research team members in progress
                         update_research_team_status("in_progress")
                         # Extract latest bear response
                         bear_responses = debate_state["bear_history"].split("\n")
                         latest_bear = bear_responses[-1] if bear_responses else ""
                         if latest_bear:
+                            log_debug_message("Bear_Researcher", latest_bear)
                             message_buffer.add_message("Reasoning", latest_bear)
                             # Update research report with bear's latest analysis
                             message_buffer.update_report_section(
@@ -957,8 +1171,10 @@ def run_analysis():
                         "judge_decision" in debate_state
                         and debate_state["judge_decision"]
                     ):
+                        log_debug_message("Research_Manager", "Processing final decision")
                         # Keep all research team members in progress until final decision
                         update_research_team_status("in_progress")
+                        log_debug_message("Research_Manager", debate_state["judge_decision"])
                         message_buffer.add_message(
                             "Reasoning",
                             f"Research Manager: {debate_state['judge_decision']}",
@@ -969,6 +1185,7 @@ def run_analysis():
                             f"{message_buffer.report_sections['investment_plan']}\n\n### Research Manager Decision\n{debate_state['judge_decision']}",
                         )
                         # Mark all research team members as completed
+                        log_debug_message("Agent_Status", "Research team completed, starting risk management")
                         update_research_team_status("completed")
                         # Set first risk analyst to in_progress
                         message_buffer.update_agent_status(
@@ -989,15 +1206,18 @@ def run_analysis():
                 # Risk Management Team - Handle Risk Debate State
                 if "risk_debate_state" in chunk and chunk["risk_debate_state"]:
                     risk_state = chunk["risk_debate_state"]
+                    log_debug_message("Risk_Debate", f"Processing risk debate state with keys: {list(risk_state.keys())}")
 
                     # Update Risky Analyst status and report
                     if (
                         "current_risky_response" in risk_state
                         and risk_state["current_risky_response"]
                     ):
+                        log_debug_message("Risky_Analyst", "Processing risky analyst response")
                         message_buffer.update_agent_status(
                             "Risky Analyst", "in_progress"
                         )
+                        log_debug_message("Risky_Analyst", risk_state["current_risky_response"])
                         message_buffer.add_message(
                             "Reasoning",
                             f"Risky Analyst: {risk_state['current_risky_response']}",
@@ -1013,9 +1233,11 @@ def run_analysis():
                         "current_safe_response" in risk_state
                         and risk_state["current_safe_response"]
                     ):
+                        log_debug_message("Safe_Analyst", "Processing safe analyst response")
                         message_buffer.update_agent_status(
                             "Safe Analyst", "in_progress"
                         )
+                        log_debug_message("Safe_Analyst", risk_state["current_safe_response"])
                         message_buffer.add_message(
                             "Reasoning",
                             f"Safe Analyst: {risk_state['current_safe_response']}",
@@ -1031,9 +1253,11 @@ def run_analysis():
                         "current_neutral_response" in risk_state
                         and risk_state["current_neutral_response"]
                     ):
+                        log_debug_message("Neutral_Analyst", "Processing neutral analyst response")
                         message_buffer.update_agent_status(
                             "Neutral Analyst", "in_progress"
                         )
+                        log_debug_message("Neutral_Analyst", risk_state["current_neutral_response"])
                         message_buffer.add_message(
                             "Reasoning",
                             f"Neutral Analyst: {risk_state['current_neutral_response']}",
@@ -1046,9 +1270,11 @@ def run_analysis():
 
                     # Update Portfolio Manager status and final decision
                     if "judge_decision" in risk_state and risk_state["judge_decision"]:
+                        log_debug_message("Portfolio_Manager", "Processing final portfolio decision")
                         message_buffer.update_agent_status(
                             "Portfolio Manager", "in_progress"
                         )
+                        log_debug_message("Portfolio_Manager", risk_state["judge_decision"])
                         message_buffer.add_message(
                             "Reasoning",
                             f"Portfolio Manager: {risk_state['judge_decision']}",
@@ -1059,6 +1285,7 @@ def run_analysis():
                             f"### Portfolio Manager Decision\n{risk_state['judge_decision']}",
                         )
                         # Mark risk analysts as completed
+                        log_debug_message("Agent_Status", "All risk management team completed")
                         message_buffer.update_agent_status("Risky Analyst", "completed")
                         message_buffer.update_agent_status("Safe Analyst", "completed")
                         message_buffer.update_agent_status(
@@ -1084,6 +1311,11 @@ def run_analysis():
         message_buffer.add_message(
             "Analysis", f"Completed analysis for {selections['analysis_date']}"
         )
+        
+        # 添加调试日志文件位置提示
+        message_buffer.add_message(
+            "System", f"调试消息已保存到: {debug_log_file}"
+        )
 
         # Update final report sections
         for section in message_buffer.report_sections.keys():
@@ -1096,7 +1328,7 @@ def run_analysis():
         update_display(layout)
 
 
-@app.command()
+@app.command("analyze")
 def analyze():
     run_analysis()
 

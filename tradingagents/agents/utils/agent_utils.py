@@ -397,6 +397,8 @@ class Toolkit:
 
         return openai_news_results
 
+
+
     @staticmethod
     @tool
     def get_fundamentals_openai(

@@ -11,6 +11,10 @@ from tenacity import (
     retry_if_exception_type,
     retry_if_result,
 )
+from ..utils.logging_manager import get_logger
+
+# 创建日志器
+logger = get_logger('dataflow', 'googlenews')
 
 
 def is_rate_limited(response):
@@ -27,7 +31,7 @@ def make_request(url, headers):
     """Make a request with retry logic for rate limiting"""
     # Random delay before each request to avoid detection
     time.sleep(random.uniform(2, 6))
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=headers, timeout=30)
     return response
 
 
@@ -88,7 +92,17 @@ def getNewsData(query, start_date, end_date):
                         }
                     )
                 except Exception as e:
-                    print(f"Error processing result: {e}")
+                    logger.warning(
+                        "Error processing Google News result",
+                        extra={
+                            'component': 'googlenews_utils',
+                            'function': 'getNewsData',
+                            'error_type': type(e).__name__,
+                            'error_message': str(e),
+                            'query': query,
+                            'page': page
+                        }
+                    )
                     # If one of the fields is not found, skip this result
                     continue
 
@@ -102,7 +116,18 @@ def getNewsData(query, start_date, end_date):
             page += 1
 
         except Exception as e:
-            print(f"Failed after multiple retries: {e}")
+            logger.error(
+                "Failed to fetch Google News data after multiple retries",
+                extra={
+                    'component': 'googlenews_utils',
+                    'function': 'getNewsData',
+                    'error_type': type(e).__name__,
+                    'error_message': str(e),
+                    'query': query,
+                    'page': page,
+                    'url': url
+                }
+            )
             break
 
     return news_results

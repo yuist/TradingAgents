@@ -112,17 +112,72 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-### Required APIs
+### Configuration
 
-You will also need the FinnHub API for financial data. All of our code is implemented with the free tier.
+#### Method 1: Using Configuration File (Recommended)
+
+Copy the example configuration file:
+```bash
+cp config_example.yaml config.yaml
+```
+
+Set up your API keys as environment variables:
+```bash
+# Windows (PowerShell)
+$env:OPENAI_API_KEY="your-openai-api-key"
+$env:GOOGLE_API_KEY="your-google-api-key"
+$env:ANTHROPIC_API_KEY="your-anthropic-api-key"
+$env:OPENROUTER_API_KEY="your-openrouter-api-key"
+$env:DEEPSEEK_API_KEY="your-deepseek-api-key"
+$env:QWEN_API_KEY="your-qwen-api-key"
+$env:FINNHUB_API_KEY="your-finnhub-api-key"
+$env:ALPHA_VANTAGE_API_KEY="your-alpha-vantage-api-key"
+$env:POLYGON_API_KEY="your-polygon-api-key"
+
+# Linux/macOS
+export OPENAI_API_KEY="your-openai-api-key"
+export GOOGLE_API_KEY="your-google-api-key"
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
+export OPENROUTER_API_KEY="your-openrouter-api-key"
+export DEEPSEEK_API_KEY="your-deepseek-api-key"
+export QWEN_API_KEY="your-qwen-api-key"
+export FINNHUB_API_KEY="your-finnhub-api-key"
+export ALPHA_VANTAGE_API_KEY="your-alpha-vantage-api-key"
+export POLYGON_API_KEY="your-polygon-api-key"
+```
+
+Edit the `config.yaml` file to select your preferred LLM provider and models.
+
+#### Method 2: Using Environment Variables (Legacy)
+
+You will need financial data APIs. All of our code is implemented with the free tier.
 ```bash
 export FINNHUB_API_KEY=$YOUR_FINNHUB_API_KEY
+export ALPHA_VANTAGE_API_KEY=$YOUR_ALPHA_VANTAGE_API_KEY  # Optional
+export POLYGON_API_KEY=$YOUR_POLYGON_API_KEY  # Optional
 ```
 
 You will need the OpenAI API for all the agents.
 ```bash
 export OPENAI_API_KEY=$YOUR_OPENAI_API_KEY
 ```
+
+#### Multi-Data Provider Support
+
+TradingAgents now supports multiple financial data providers to enhance data coverage and reliability:
+
+- **Finnhub**: Primary data source for news, insider transactions, and basic market data
+- **Alpha Vantage**: Stock prices, technical indicators, and fundamental data
+- **Polygon**: Real-time market data, news, financials, and market status
+
+Each provider offers different strengths:
+- Use **Finnhub** for comprehensive news analysis and insider sentiment
+- Use **Alpha Vantage** for detailed technical analysis and fundamental metrics
+- Use **Polygon** for real-time data and comprehensive financial statements
+
+The framework automatically handles API key management and provides unified interfaces for all data sources.
+
+> For more detailed configuration options, see [CONFIG_GUIDE.md](CONFIG_GUIDE.md)
 
 ### CLI Usage
 
@@ -150,7 +205,7 @@ An interface will appear showing results as they load, letting you track the age
 
 ### Implementation Details
 
-We built TradingAgents with LangGraph to ensure flexibility and modularity. We utilize `o1-preview` and `gpt-4o` as our deep thinking and fast thinking LLMs for our experiments. However, for testing purposes, we recommend you use `o4-mini` and `gpt-4.1-mini` to save on costs as our framework makes **lots of** API calls.
+We built TradingAgents with LangGraph to ensure flexibility and modularity. We utilize `o1-preview` and `gpt-4o` as our deep thinking and fast thinking LLMs for our experiments. However, for testing purposes, we recommend you use `gpt-4o-mini` to save on costs as our framework makes **lots of** API calls.
 
 ### Python Usage
 
@@ -158,9 +213,9 @@ To use TradingAgents inside your code, you can import the `tradingagents` module
 
 ```python
 from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
 
-ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
+# Method 1: Using configuration file (recommended)
+ta = TradingAgentsGraph(debug=True, config_path="config.yaml")
 
 # forward propagate
 _, decision = ta.propagate("NVDA", "2024-05-10")
@@ -170,15 +225,18 @@ print(decision)
 You can also adjust the default configuration to set your own choice of LLMs, debate rounds, etc.
 
 ```python
+# Method 2: Using traditional configuration (legacy)
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
+import copy
 
 # Create a custom config
-config = DEFAULT_CONFIG.copy()
-config["deep_think_llm"] = "gpt-4.1-nano"  # Use a different model
-config["quick_think_llm"] = "gpt-4.1-nano"  # Use a different model
-config["max_debate_rounds"] = 1  # Increase debate rounds
-config["online_tools"] = True # Use online tools or cached data
+config = copy.deepcopy(DEFAULT_CONFIG)
+config["llm_provider"] = "google"  # Use Google as LLM provider
+config["deep_think_llm"] = "gemini-2.0-flash"  # Use a different model
+config["quick_think_llm"] = "gemini-2.0-flash"  # Use a different model
+config["max_debate_rounds"] = 3  # Set debate rounds
+config["use_online_tools"] = True # Use online tools or cached data
 
 # Initialize with custom config
 ta = TradingAgentsGraph(debug=True, config=config)

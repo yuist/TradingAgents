@@ -1,0 +1,90 @@
+{
+  "health_check_interval": 300,
+  "retry_config": {
+    "max_retries": 3,
+    "initial_delay": 1,
+    "max_delay": 60,
+    "backoff_factor": 2
+  },
+  "data_sources": {
+    "yahoo_finance": {
+      "enabled": true,
+      "priority": 2,
+      "timeout": 30,
+      "rate_limit": {
+        "calls_per_minute": 200,
+        "calls_per_hour": 2000
+      }
+    },
+    "alpha_vantage": {
+      "enabled": false,
+      "priority": 1,
+      "api_key": "YOUR_ALPHA_VANTAGE_API_KEY_HERE",
+      "timeout": 30,
+      "rate_limit": {
+        "calls_per_minute": 5,
+        "calls_per_day": 500
+      }
+    },
+    "tushare": {
+      "enabled": false,
+      "priority": 1,
+      "token": "YOUR_TUSHARE_TOKEN_HERE",
+      "timeout": 30,
+      "rate_limit": {
+        "calls_per_minute": 200,
+        "calls_per_day": 10000
+      }
+    },
+    "sina_finance": {
+      "enabled": true,
+      "priority": 3,
+      "timeout": 10,
+      "rate_limit": {
+        "calls_per_minute": 100
+      }
+    },
+    "polygon": {
+      "enabled": false,
+      "priority": 1,
+      "api_key": "YOUR_POLYGON_API_KEY_HERE",
+      "timeout": 30,
+      "rate_limit": {
+        "calls_per_minute": 5,
+        "calls_per_day": 1000
+      }
+    }
+  },
+  "market_preferences": {
+    "domestic": [
+      "tushare",
+      "sina_finance",
+      "yahoo_finance"
+    ],
+    "international": [
+      "alpha_vantage",
+      "polygon",
+      "yahoo_finance"
+    ],
+    "crypto": [
+      "alpha_vantage",
+      "polygon"
+    ]
+  },
+  "data_validation": {
+    "min_data_points": 1,
+    "max_price_change_percent": 50,
+    "required_columns": [
+      "Open",
+      "High",
+      "Low",
+      "Close"
+    ]
+  },
+  "fallback_strategy": {
+    "enable_cache": true,
+    "cache_duration_hours": 24,
+    "enable_partial_data": true,
+    "min_success_rate": 0.8
+  }
+}

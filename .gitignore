@@ -1,10 +1,308 @@
-env/
+# ================================
+# TradingAgents 项目 .gitignore
+# 针对 Python 交易系统优化
+# ================================
+
+# ================================
+# Python 相关
+# ================================
+# 字节码 / 优化 / DLL 文件
 __pycache__/
-.DS_Store
+*.py[cod]
+*$py.class
+*.so
+
+# C 扩展
+*.so
+
+# 分发 / 打包
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# 单元测试 / 覆盖率报告
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# ================================
+# 虚拟环境
+# ================================
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.virtualenv
+.venv
+
+# ================================
+# 包管理器
+# ================================
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# uv
+uv.lock
+
+# Poetry
+poetry.lock
+
+# Pipenv
+Pipfile.lock
+
+# pdm
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# ================================
+# 配置文件（敏感信息）
+# ================================
+# 主配置文件（包含API密钥）
+config.yaml
+config.yml
+.env
+.env.local
+.env.*.local
+
+# API 密钥和令牌
+*api_key*
+*secret*
+*token*
+*credentials*
+.secrets/
+
+# ================================
+# 交易系统相关
+# ================================
+# 日志文件
+logs/
+*.log
+*.log.*
+
+# 交易数据（可能包含敏感信息）
+data/
 *.csv
-src/
+*.json
+!data_sources.json
+!data_sources_sample.json
+
+# 交易结果和报告
+results/
+reports/
+backtest_results/
 eval_results/
 eval_data/
-*.egg-info/
-.env
-config.yaml
+
+# 缓存文件
+cache/
+.cache/
+data_cache/
+__cache__/
+
+# 临时交易文件
+temp/
+tmp/
+*.tmp
+*.temp
+
+# 模型文件（通常很大）
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.model
+
+# ================================
+# IDE / 编辑器
+# ================================
+# Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# JetBrains
+.idea/
+*.swp
+*.swo
+
+# Vim
+*~
+*.swp
+*.swo
+.vimrc.local
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# ================================
+# 操作系统
+# ================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ================================
+# 开发工具
+# ================================
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# ================================
+# 项目特定
+# ================================
+# 原有配置的保留项目
+src/
+
+# 备份文件
+*.bak
+*.backup
+*_backup.*
+
+# 测试输出
+test_output/
+test_results/
+
+# 文档生成
+docs/_build/
+
+# ================================
+# 网络和下载
+# ================================
+*.download
+wget-log
+
+# ================================
+# 压缩文件（通常不需要版本控制）
+# ================================
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z

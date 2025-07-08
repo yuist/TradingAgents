@@ -8,16 +8,21 @@
 import os
 import sys
 import argparse
-from typing import Dict, Any
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+import logging
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from tradingagents.dataflows.data_source_config import DataSourceConfig
 
+# 获取配置管理专用日志器
+logger = logging.getLogger('tradingagents.dataflows.config_manager')
+
 def show_status(config_manager: DataSourceConfig):
     """显示当前配置状态"""
-    print("\n=== 数据源配置状态 ===")
+    logger.info("\n=== 数据源配置状态 ===")
     
     enabled_sources = config_manager.get_enabled_sources()
     disabled_sources = {}
@@ -27,62 +32,62 @@ def show_status(config_manager: DataSourceConfig):
         if not config.get('enabled', False):
             disabled_sources[name] = config
     
-    print(f"\n已启用的数据源 ({len(enabled_sources)})：")
+    logger.info(f"\n已启用的数据源 ({len(enabled_sources)})：")
     for name, config in sorted(enabled_sources.items(), key=lambda x: x[1].get('priority', 999)):
         priority = config.get('priority', '未设置')
         timeout = config.get('timeout', '未设置')
         has_key = bool(config.get('api_key') or config.get('token'))
         key_status = "✓" if has_key else "✗"
-        print(f"  - {name}: 优先级={priority}, 超时={timeout}s, API密钥={key_status}")
+        logger.info(f"  - {name}: 优先级={priority}, 超时={timeout}s, API密钥={key_status}")
     
-    print(f"\n已禁用的数据源 ({len(disabled_sources)})：")
+    logger.info(f"\n已禁用的数据源 ({len(disabled_sources)})：")
     for name, config in disabled_sources.items():
         has_key = bool(config.get('api_key') or config.get('token'))
         key_status = "✓" if has_key else "✗"
         reason = "缺少API密钥" if not has_key else "手动禁用"
-        print(f"  - {name}: API密钥={key_status} ({reason})")
+        logger.info(f"  - {name}: API密钥={key_status} ({reason})")
     
     # 验证配置
     issues = config_manager.validate_config()
     if issues['errors'] or issues['warnings']:
-        print("\n=== 配置问题 ===")
+        logger.info("\n=== 配置问题 ===")
         for error in issues['errors']:
-            print(f"  错误: {error}")
+            logger.error(f"  错误: {error}")
         for warning in issues['warnings']:
-            print(f"  警告: {warning}")
+            logger.warning(f"  警告: {warning}")
     else:
-        print("\n✓ 配置验证通过")
+        logger.info("\n✓ 配置验证通过")
 
 def enable_source(config_manager: DataSourceConfig, source_name: str):
     """启用数据源"""
     all_sources = config_manager.config.get('data_sources', {})
     if source_name not in all_sources:
-        print(f"错误: 未找到数据源 '{source_name}'")
-        print(f"可用的数据源: {', '.join(all_sources.keys())}")
+        logger.error(f"错误: 未找到数据源 '{source_name}'")
+        logger.info(f"可用的数据源: {', '.join(all_sources.keys())}")
         return
     
     source_config = all_sources[source_name]
     has_key = bool(source_config.get('api_key') or source_config.get('token'))
     
     if not has_key and source_name in ['alpha_vantage', 'tushare', 'polygon']:
-        print(f"警告: {source_name} 需要API密钥才能正常工作")
-        print("请在 config.yaml 中配置相应的API密钥")
+        logger.warning(f"警告: {source_name} 需要API密钥才能正常工作")
+        logger.info("请在 config.yaml 中配置相应的API密钥")
         response = input("是否仍要启用? (y/N): ")
         if response.lower() != 'y':
             return
     
     config_manager.enable_data_source(source_name, True)
-    print(f"✓ 已启用数据源: {source_name}")
+    logger.info(f"✓ 已启用数据源: {source_name}")
 
 def disable_source(config_manager: DataSourceConfig, source_name: str):
     """禁用数据源"""
     config_manager.enable_data_source(source_name, False)
-    print(f"✓ 已禁用数据源: {source_name}")
+    logger.info(f"✓ 已禁用数据源: {source_name}")
 
 def set_priority(config_manager: DataSourceConfig, source_name: str, priority: int):
     """设置数据源优先级"""
     config_manager.set_priority(source_name, priority)
-    print(f"✓ 已设置 {source_name} 优先级为: {priority}")
+    logger.info(f"✓ 已设置 {source_name} 优先级为: {priority}")
 
 def show_help():
     """显示帮助信息"""
@@ -134,7 +139,7 @@ def main():
     try:
         config_manager = DataSourceConfig()
     except Exception as e:
-        print(f"错误: 无法加载配置文件: {e}")
+        logger.error(f"错误: 无法加载配置文件: {e}")
         return
     
     if command == 'status':
@@ -142,28 +147,28 @@ def main():
     
     elif command == 'enable':
         if len(sys.argv) < 3:
-            print("错误: 请指定要启用的数据源名称")
+            logger.error("错误: 请指定要启用的数据源名称")
             return
         enable_source(config_manager, sys.argv[2])
     
     elif command == 'disable':
         if len(sys.argv) < 3:
-            print("错误: 请指定要禁用的数据源名称")
+            logger.error("错误: 请指定要禁用的数据源名称")
             return
         disable_source(config_manager, sys.argv[2])
     
     elif command == 'priority':
         if len(sys.argv) < 4:
-            print("错误: 请指定数据源名称和优先级")
+            logger.error("错误: 请指定数据源名称和优先级")
             return
         try:
             priority = int(sys.argv[3])
             set_priority(config_manager, sys.argv[2], priority)
         except ValueError:
-            print("错误: 优先级必须是数字")
+            logger.error("错误: 优先级必须是数字")
     
     else:
-        print(f"错误: 未知命令 '{command}'")
+        logger.error(f"错误: 未知命令 '{command}'")
         show_help()
 
 if __name__ == "__main__":

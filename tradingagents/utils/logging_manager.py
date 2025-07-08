@@ -161,14 +161,14 @@ class LoggerManager:
             'retention_days': 30,
             'enable_async': True,
             'enable_structured': True,
-            'enable_console': True,
+            'enable_console': False,  # 禁用控制台输出以避免日志刷屏
             'categories': {
-                'trading': {'level': 'INFO', 'file': 'trading.log'},
-                'dataflow': {'level': 'INFO', 'file': 'dataflow.log'},
+                'trading': {'level': 'WARNING', 'file': 'trading.log'},
+                'dataflow': {'level': 'WARNING', 'file': 'dataflow.log'},  # 提高dataflow日志级别
                 'agents': {'level': 'INFO', 'file': 'agents.log'},
                 'cli': {'level': 'INFO', 'file': 'cli.log'},
                 'system': {'level': 'WARNING', 'file': 'system.log'},
-                'performance': {'level': 'INFO', 'file': 'performance.log'},
+                'performance': {'level': 'WARNING', 'file': 'performance.log'},
             }
         }
     
@@ -318,9 +318,10 @@ class LoggerManager:
             if log_file.stat().st_mtime < cutoff_time:
                 try:
                     log_file.unlink()
-                    print(f"Deleted old log file: {log_file}")
+                    # 使用标准输出而不是日志记录，避免循环依赖
                 except Exception as e:
-                    print(f"Failed to delete log file {log_file}: {e}")
+                    # 使用标准输出而不是日志记录，避免循环依赖
+                    pass
     
     def close(self):
         """关闭日志管理器"""

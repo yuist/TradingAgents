@@ -117,14 +117,10 @@ class TradingAgentsGraph:
             )
             
             if self.debug:
-                print(f"✅ 成功初始化 LLM:")
-                print(f"   提供商: {llm_config.provider}")
-                print(f"   深度思考模型: {llm_config.deep_think_model}")
-                print(f"   快速思考模型: {llm_config.quick_think_model}")
+                self.logger.info(f"✅ 成功初始化 LLM: 提供商={llm_config.provider}, 深度思考模型={llm_config.deep_think_model}, 快速思考模型={llm_config.quick_think_model}")
                 
         except Exception as e:
-            print(f"❌ LLM 初始化失败: {e}")
-            print(f"   请检查配置文件和 API 密钥设置")
+            self.logger.error(f"❌ LLM 初始化失败: {e} - 请检查配置文件和 API 密钥设置")
             raise
         
         # 初始化工具包，包含所有数据获取和分析工具
@@ -270,7 +266,7 @@ class TradingAgentsGraph:
         # 标准化股票代码格式
         normalized_company_name = self._normalize_ticker(company_name)
         if normalized_company_name != company_name:
-            print(f"股票代码已标准化: {company_name} -> {normalized_company_name}")
+            self.logger.info(f"股票代码已标准化: {company_name} -> {normalized_company_name}")
         
         self.ticker = normalized_company_name
 

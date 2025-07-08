@@ -597,13 +597,20 @@ class ConfigManager:
         """
         return self.config['debate'].copy()
     
-    def get_logging_config(self) -> Dict[str, Any]:
+    def get_logging_config(self, environment: str = None) -> Dict[str, Any]:
         """
         获取日志配置
+        
+        Args:
+            environment: 环境名称 ('development' 或 'production')，如果未指定则从环境变量获取
         
         Returns:
             Dict: 日志配置字典
         """
+        # 确定当前环境
+        if environment is None:
+            environment = os.getenv('TRADING_ENV', 'development')
+        
         default_logging_config = {
             'version': 1,
             'disable_existing_loggers': False,
@@ -614,7 +621,7 @@ class ConfigManager:
             'retention_days': 30,
             'enable_async': True,
             'enable_structured': True,
-            'enable_console': True,
+            'enable_console': False,  # 默认关闭控制台输出
             'categories': {
                 'trading': {'level': 'INFO', 'file': 'trading.log'},
                 'dataflow': {'level': 'INFO', 'file': 'dataflow.log'},
@@ -628,10 +635,32 @@ class ConfigManager:
         # 如果配置文件中有日志配置，则合并
         if 'logging' in self.config:
             user_config = self.config['logging'].copy()
+            
+            # 应用环境特定配置
+            if environment in user_config:
+                env_config = user_config[environment]
+                # 移除环境配置，避免重复合并
+                user_config.pop(environment, None)
+                user_config.pop('development', None)
+                user_config.pop('production', None)
+                # 合并环境特定配置
+                user_config.update(env_config)
+            
             # 深度合并categories配置
             if 'categories' in user_config and 'categories' in default_logging_config:
                 default_categories = default_logging_config['categories'].copy()
-                default_categories.update(user_config['categories'])
+                # 深度合并每个分类的配置，确保file字段不丢失
+                for category, category_config in user_config['categories'].items():
+                    if category in default_categories:
+                        # 合并现有分类的配置，保留默认的file字段
+                        merged_config = default_categories[category].copy()
+                        merged_config.update(category_config)
+                        default_categories[category] = merged_config
+                    else:
+                        # 新分类，确保有file字段
+                        if 'file' not in category_config:
+                            category_config['file'] = f'{category}.log'
+                        default_categories[category] = category_config
                 user_config['categories'] = default_categories
             
             default_logging_config.update(user_config)

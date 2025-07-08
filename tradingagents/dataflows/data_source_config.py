@@ -10,6 +10,10 @@ import json
 import yaml
 from typing import Dict, Any, Optional
 from pathlib import Path
+import logging
+
+# 获取数据源配置专用日志器
+logger = logging.getLogger('tradingagents.dataflows.config')
 
 class DataSourceConfig:
     """数据源配置管理器"""
@@ -42,29 +46,39 @@ class DataSourceConfig:
             
             api_keys = main_config.get('api_keys', {})
             
+            # 确保config中有api_keys结构
+            if 'api_keys' not in self.config:
+                self.config['api_keys'] = {}
+            
+            # 将API密钥复制到顶层api_keys结构（供MultiSourceManager使用）
+            self.config['api_keys'].update(api_keys)
+            
             # 更新Alpha Vantage API密钥
             if 'alpha_vantage_api_key' in api_keys and api_keys['alpha_vantage_api_key']:
                 if 'alpha_vantage' in self.config.get('data_sources', {}):
                     self.config['data_sources']['alpha_vantage']['api_key'] = api_keys['alpha_vantage_api_key']
-                    # 如果有API密钥，可以启用数据源（但保持注释状态）
-                    # self.config['data_sources']['alpha_vantage']['enabled'] = True
+                    # 如果有API密钥，自动启用数据源
+                    self.config['data_sources']['alpha_vantage']['enabled'] = True
+                    logger.info(f"Alpha Vantage数据源已启用，API密钥: {api_keys['alpha_vantage_api_key'][:8]}...")
             
             # 更新TuShare Token
             if 'tushare_token' in api_keys and api_keys['tushare_token']:
                 if 'tushare' in self.config.get('data_sources', {}):
                     self.config['data_sources']['tushare']['token'] = api_keys['tushare_token']
-                    # 如果有Token，可以启用数据源（但保持注释状态）
-                    # self.config['data_sources']['tushare']['enabled'] = True
+                    # 如果有Token，自动启用数据源
+                    self.config['data_sources']['tushare']['enabled'] = True
+                    logger.info(f"TuShare数据源已启用，Token: {api_keys['tushare_token'][:8]}...")
             
             # 更新Polygon API密钥
             if 'polygon_api_key' in api_keys and api_keys['polygon_api_key']:
                 if 'polygon' in self.config.get('data_sources', {}):
                     self.config['data_sources']['polygon']['api_key'] = api_keys['polygon_api_key']
-                    # 如果有API密钥，可以启用数据源（但保持注释状态）
-                    # self.config['data_sources']['polygon']['enabled'] = True
+                    # 如果有API密钥，自动启用数据源
+                    self.config['data_sources']['polygon']['enabled'] = True
+                    logger.info(f"Polygon数据源已启用，API密钥: {api_keys['polygon_api_key'][:8]}...")
                     
         except Exception as e:
-            print(f"从主配置文件加载API密钥失败: {e}")
+            logger.error(f"从主配置文件加载API密钥失败: {e}")
     
     def _load_config(self) -> Dict[str, Any]:
         """加载配置文件"""
@@ -73,7 +87,7 @@ class DataSourceConfig:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
-                print(f"加载配置文件失败: {e}")
+                logger.error(f"加载配置文件失败: {e}")
         
         return self._get_default_config()
     
@@ -87,11 +101,22 @@ class DataSourceConfig:
                 "max_delay": 60,
                 "backoff_factor": 2
             },
+            "circuit_breaker": {
+                "failure_threshold": 3,
+                "timeout_minutes": 30,
+                "half_open_success_threshold": 2
+            },
+            "cache": {
+                "enabled": True,
+                "default_ttl_minutes": 15,
+                "max_entries": 1000,
+                "cleanup_interval_minutes": 30
+            },
             "data_sources": {
                 "yahoo_finance": {
                     "enabled": True,
                     "priority": 2,
-                    "timeout": 30,
+                    "timeout": 10,
                     "rate_limit": {
                         "calls_per_minute": 200,
                         "calls_per_hour": 2000
@@ -101,7 +126,7 @@ class DataSourceConfig:
                     "enabled": False,
                     "priority": 1,
                     "api_key": "",  # 需要用户填写
-                    "timeout": 30,
+                    "timeout": 10,
                     "rate_limit": {
                         "calls_per_minute": 5,
                         "calls_per_day": 500
@@ -111,7 +136,7 @@ class DataSourceConfig:
                     "enabled": False,
                     "priority": 1,
                     "token": "",  # 需要用户填写
-                    "timeout": 30,
+                    "timeout": 10,
                     "rate_limit": {
                         "calls_per_minute": 200,
                         "calls_per_day": 10000
@@ -129,7 +154,7 @@ class DataSourceConfig:
                     "enabled": False,
                     "priority": 1,
                     "api_key": "",  # 需要用户填写
-                    "timeout": 30,
+                    "timeout": 10,
                     "rate_limit": {
                         "calls_per_minute": 5,
                         "calls_per_day": 1000
@@ -160,9 +185,9 @@ class DataSourceConfig:
             os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
-            print(f"配置已保存到: {self.config_file}")
+            logger.info(f"配置已保存到: {self.config_file}")
         except Exception as e:
-            print(f"保存配置失败: {e}")
+            logger.error(f"保存配置失败: {e}")
     
     def get_config(self) -> Dict[str, Any]:
         """获取完整配置"""
@@ -180,9 +205,9 @@ class DataSourceConfig:
             elif 'token' in self.config['data_sources'][source_name]:
                 self.config['data_sources'][source_name]['token'] = api_key
             self.save_config()
-            print(f"已更新 {source_name} 的API密钥")
+            logger.info(f"已更新 {source_name} 的API密钥")
         else:
-            print(f"未找到数据源: {source_name}")
+            logger.warning(f"未找到数据源: {source_name}")
     
     def enable_data_source(self, source_name: str, enabled: bool = True):
         """启用/禁用数据源"""
@@ -190,18 +215,18 @@ class DataSourceConfig:
             self.config['data_sources'][source_name]['enabled'] = enabled
             self.save_config()
             status = "启用" if enabled else "禁用"
-            print(f"已{status}数据源: {source_name}")
+            logger.info(f"已{status}数据源: {source_name}")
         else:
-            print(f"未找到数据源: {source_name}")
+            logger.warning(f"未找到数据源: {source_name}")
     
     def set_priority(self, source_name: str, priority: int):
         """设置数据源优先级"""
         if source_name in self.config.get('data_sources', {}):
             self.config['data_sources'][source_name]['priority'] = priority
             self.save_config()
-            print(f"已设置 {source_name} 优先级为: {priority}")
+            logger.info(f"已设置 {source_name} 优先级为: {priority}")
         else:
-            print(f"未找到数据源: {source_name}")
+            logger.warning(f"未找到数据源: {source_name}")
     
     def get_enabled_sources(self) -> Dict[str, Dict[str, Any]]:
         """获取已启用的数据源"""
@@ -253,10 +278,10 @@ class DataSourceConfig:
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(sample_config, f, indent=2, ensure_ascii=False)
-            print(f"示例配置文件已创建: {file_path}")
-            print("请根据需要修改配置并重命名为 data_sources.json")
+            logger.info(f"示例配置文件已创建: {file_path}")
+            logger.info("请根据需要修改配置并重命名为 data_sources.json")
         except Exception as e:
-            print(f"创建示例配置文件失败: {e}")
+            logger.error(f"创建示例配置文件失败: {e}")
 
 # 环境变量配置支持
 class EnvironmentConfig:
@@ -320,24 +345,24 @@ def setup_api_keys(**kwargs):
 
 if __name__ == "__main__":
     # 示例用法
-    print("数据源配置管理器")
-    print("=" * 50)
+    logger.info("数据源配置管理器")
+    logger.info("=" * 50)
     
     # 创建配置管理器
     config_manager = DataSourceConfig()
     
     # 显示当前配置状态
     enabled_sources = config_manager.get_enabled_sources()
-    print(f"已启用的数据源: {list(enabled_sources.keys())}")
+    logger.info(f"已启用的数据源: {list(enabled_sources.keys())}")
     
     # 验证配置
     issues = config_manager.validate_config()
     if issues['errors']:
-        print(f"配置错误: {issues['errors']}")
+        logger.error(f"配置错误: {issues['errors']}")
     if issues['warnings']:
-        print(f"配置警告: {issues['warnings']}")
+        logger.warning(f"配置警告: {issues['warnings']}")
     
     # 创建示例配置文件
     config_manager.create_sample_config()
     
-    print("\n配置管理完成！")
+    logger.info("配置管理完成！")

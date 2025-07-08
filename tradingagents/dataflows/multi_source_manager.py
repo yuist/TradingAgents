@@ -14,6 +14,11 @@ from enum import Enum
 import pandas as pd
 from ..utils.logging_manager import get_logger
 
+# 导入新的优化组件
+from .circuit_breaker import get_circuit_breaker_manager
+from .data_cache import get_data_cache
+from .concurrent_fetcher import get_concurrent_fetcher
+
 # 导入现有的数据获取函数
 try:
     from .interface import get_YFin_data_online
@@ -1319,19 +1324,27 @@ class MultiSourceDataManager:
                 'quality_score': 0.0
             }
     
-    def get_stock_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """获取股票数据（主要接口）"""
+    def get_stock_data(self, symbol: str, start_date: str, end_date: str, timeout: int = 10) -> pd.DataFrame:
+        """获取股票数据（主要接口）- 优化版本，支持缓存、熔断和并发"""
+        # 1. 检查缓存
+        cache = get_data_cache()
+        cached_result = cache.get(symbol, start_date, end_date)
+        if cached_result is not None:
+            cached_data, source, age = cached_result
+            logger.info(f"从缓存获取 {symbol} 数据，共 {len(cached_data)} 条记录，来源: {source}，缓存年龄: {age}秒")
+            return cached_data
+        
         market_type = self._detect_market_type(symbol)
         providers = self.providers.get(market_type, [])
         
         if not providers:
             raise ValueError(f"没有可用的数据源支持市场类型: {market_type}")
         
-        # 获取数据源配置
+        # 2. 获取熔断器管理器并过滤可用数据源
+        circuit_manager = get_circuit_breaker_manager()
         data_sources = self.config.get('data_sources', {})
         
-        last_exception = None
-        
+        available_providers = []
         for provider in providers:
             # 检查数据源是否enabled
             source_name = provider.name.lower().replace(' ', '_')
@@ -1346,10 +1359,14 @@ class MultiSourceDataManager:
             else:
                 enabled = True  # 默认启用
             
-            logger.debug(f"数据源 {provider.name} (检测名称: {source_name}) enabled状态: {enabled}")
-            
             if not enabled:
                 logger.debug(f"跳过disabled数据源: {provider.name}")
+                continue
+            
+            # 检查熔断器状态
+            circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+            if not circuit_breaker.can_execute():
+                logger.debug(f"跳过熔断的数据源: {provider.name}")
                 continue
             
             # 检查健康状态
@@ -1361,45 +1378,161 @@ class MultiSourceDataManager:
                 logger.debug(f"跳过失败的数据源: {provider.name}")
                 continue
             
-            try:
-                logger.info(f"尝试从 {provider.name} 获取 {symbol} 数据")
-                data = provider.get_stock_data(symbol, start_date, end_date)
-                
-                if self._validate_data(data, symbol):
-                    logger.info(f"成功从 {provider.name} 获取 {symbol} 数据，共 {len(data)} 条记录")
-                    return data
-                else:
-                    logger.warning(f"{provider.name} 返回的数据质量不合格")
-                    continue
+            available_providers.append(provider)
+        
+        if not available_providers:
+            raise ValueError(f"没有可用的数据源支持市场类型: {market_type}")
+        
+        # 3. 使用并发获取器获取数据
+        concurrent_fetcher = get_concurrent_fetcher()
+        
+        # 按优先级分离高低优先级数据源
+        high_priority = [p for p in available_providers if p.priority <= 2]
+        low_priority = [p for p in available_providers if p.priority > 2]
+        
+        try:
+            # 使用混合策略获取数据
+            result = concurrent_fetcher.fetch_data_hybrid(
+                high_priority_providers=high_priority,
+                low_priority_providers=low_priority,
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                timeout=timeout
+            )
+            
+            if result.success and result.data is not None:
+                # 验证数据质量
+                if self._validate_data(result.data, symbol):
+                    # 记录熔断器成功
+                    circuit_breaker = circuit_manager.get_circuit_breaker(result.source)
+                    circuit_breaker.record_success()
                     
-            except Exception as e:
-                last_exception = e
-                logger.warning(f"{provider.name} 获取数据失败: {e}")
-                continue
-        
-        # 所有数据源都失败
-        error_msg = f"所有数据源均无法获取 {symbol} 的数据"
-        if last_exception:
-            error_msg += f"，最后错误: {last_exception}"
-        
-        raise Exception(error_msg)
+                    # 更新提供者健康状态
+                    for provider in available_providers:
+                        if provider.name == result.source:
+                            provider.update_health_success(result.response_time)
+                            break
+                    
+                    # 缓存数据
+                    cache.put(symbol, start_date, end_date, result.data, source=result.source)
+                    
+                    logger.info(f"成功从 {result.source} 获取 {symbol} 数据，共 {len(result.data)} 条记录，耗时 {result.response_time:.2f}秒")
+                    return result.data
+                else:
+                    logger.warning(f"{result.source} 返回的数据质量不合格")
+            
+            # 如果并发获取失败，记录所有尝试过的数据源的熔断器失败
+            for provider in available_providers:
+                circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+                circuit_breaker.record_failure()
+                provider.update_health_failure(Exception("并发获取失败"))
+            
+            raise Exception(f"所有数据源均无法获取 {symbol} 的数据: {result.error if result else '未知错误'}")
+            
+        except Exception as e:
+            logger.error(f"获取 {symbol} 数据失败: {e}")
+            raise
     
-    def get_realtime_data(self, symbol: str) -> Dict[str, Any]:
-        """获取实时数据"""
+    def get_realtime_data(self, symbol: str, timeout: int = 5) -> Dict[str, Any]:
+        """获取实时数据 - 优化版本，支持缓存、熔断和并发"""
+        # 1. 检查实时缓存
+        cache = get_data_cache()
+        cached_result = cache.get_realtime(symbol)
+        if cached_result:
+            data, source, age = cached_result
+            logger.info(f"实时数据缓存命中: {symbol}, 来源: {source}, 年龄: {age}秒")
+            return data
+        
         market_type = self._detect_market_type(symbol)
         providers = self.providers.get(market_type, [])
         
+        if not providers:
+            raise ValueError(f"没有可用的数据源支持市场类型: {market_type}")
+        
+        # 2. 获取熔断器管理器并过滤可用数据源
+        circuit_manager = get_circuit_breaker_manager()
+        data_sources = self.config.get('data_sources', {})
+        
+        available_providers = []
         for provider in providers:
-            if provider.health.status == DataSourceStatus.FAILED:
+            # 检查数据源是否enabled
+            source_name = provider.name.lower().replace(' ', '_')
+            if 'yahoo' in source_name:
+                enabled = data_sources.get('yahoo_finance', {}).get('enabled', True)
+            elif '新浪' in provider.name or 'sina' in source_name:
+                enabled = data_sources.get('sina_finance', {}).get('enabled', True)
+            elif 'alpha' in source_name:
+                enabled = data_sources.get('alpha_vantage', {}).get('enabled', False)
+            elif 'tushare' in source_name:
+                enabled = data_sources.get('tushare', {}).get('enabled', False)
+            else:
+                enabled = True  # 默认启用
+            
+            if not enabled:
+                logger.debug(f"跳过disabled数据源: {provider.name}")
                 continue
             
-            try:
-                return provider.get_realtime_data(symbol)
-            except Exception as e:
-                logger.warning(f"{provider.name} 获取实时数据失败: {e}")
+            # 检查熔断器状态
+            circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+            if not circuit_breaker.can_execute():
+                logger.debug(f"跳过熔断的数据源: {provider.name}")
                 continue
+            
+            # 跳过失败的数据源
+            if provider.health.status == DataSourceStatus.FAILED:
+                logger.debug(f"跳过失败的数据源: {provider.name}")
+                continue
+            
+            available_providers.append(provider)
         
-        raise Exception(f"无法获取 {symbol} 的实时数据")
+        if not available_providers:
+            raise ValueError(f"没有可用的数据源支持市场类型: {market_type}")
+        
+        # 3. 使用并发获取器获取实时数据
+        concurrent_fetcher = get_concurrent_fetcher()
+        
+        # 按优先级分离高低优先级数据源
+        high_priority = [p for p in available_providers if p.priority <= 2]
+        low_priority = [p for p in available_providers if p.priority > 2]
+        
+        try:
+            # 使用混合策略获取实时数据
+            result = concurrent_fetcher.fetch_realtime_data_hybrid(
+                high_priority_providers=high_priority,
+                low_priority_providers=low_priority,
+                symbol=symbol,
+                timeout=timeout
+            )
+            
+            if result.success and result.data is not None:
+                # 记录熔断器成功
+                circuit_breaker = circuit_manager.get_circuit_breaker(result.source)
+                circuit_breaker.record_success()
+                
+                # 更新提供者健康状态
+                for provider in available_providers:
+                    if provider.name == result.source:
+                        provider.update_health_success(result.response_time)
+                        break
+                
+                # 缓存实时数据（较短的缓存时间）
+                cache.put_realtime(symbol, result.data, source=result.source)
+                
+                logger.info(f"成功从 {result.source} 获取 {symbol} 实时数据，耗时 {result.response_time:.2f}秒")
+                return result.data
+            
+            # 如果并发获取失败，记录所有尝试过的数据源的熔断器失败
+            for provider in available_providers:
+                circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+                circuit_breaker.record_failure()
+                provider.update_health_failure(Exception("并发获取实时数据失败"))
+            
+            raise Exception(f"无法获取 {symbol} 的实时数据: {result.error if result else '未知错误'}")
+            
+        except Exception as e:
+            logger.error(f"获取 {symbol} 实时数据失败: {e}")
+            raise
     
     def get_health_status(self) -> Dict[str, Dict[str, Any]]:
         """获取所有数据源的健康状态"""
@@ -1462,7 +1595,12 @@ def get_multi_source_manager(config: Dict[str, Any] = None) -> MultiSourceDataMa
     
     return _global_manager
 
-def get_stock_data_with_fallback(symbol: str, start_date: str, end_date: str, config: Dict[str, Any] = None) -> pd.DataFrame:
-    """带故障转移的股票数据获取函数（便捷接口）"""
+def get_stock_data_with_fallback(symbol: str, start_date: str, end_date: str, config: Dict[str, Any] = None, timeout: int = 10) -> pd.DataFrame:
+    """带故障转移的股票数据获取函数（便捷接口）- 优化版本"""
     manager = get_multi_source_manager(config)
-    return manager.get_stock_data(symbol, start_date, end_date)
+    return manager.get_stock_data(symbol, start_date, end_date, timeout)
+
+def get_realtime_data_with_fallback(symbol: str, config: Dict[str, Any] = None, timeout: int = 5) -> Dict[str, Any]:
+    """带故障转移的实时数据获取函数（便捷接口）- 优化版本"""
+    manager = get_multi_source_manager(config)
+    return manager.get_realtime_data(symbol, timeout)

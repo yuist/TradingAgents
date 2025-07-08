@@ -12,6 +12,8 @@ import time
 from functools import lru_cache
 from ..utils.logging_manager import get_logger
 
+# 初始化模块级别的logger
+logger = get_logger('dataflow', 'stockstats')
 
 class StockstatsUtils:
     # 类级别的缓存字典
@@ -39,7 +41,6 @@ class StockstatsUtils:
         if cache_key in cls._indicator_cache:
             cache_entry = cls._indicator_cache[cache_key]
             if cls._is_cache_valid(cache_entry):
-                logger = get_logger('dataflow', 'stockstats')
                 logger.info(
                     "Cache hit",
                     extra={
@@ -52,7 +53,6 @@ class StockstatsUtils:
             else:
                 # 清理过期缓存
                 del cls._indicator_cache[cache_key]
-                logger = get_logger('dataflow', 'stockstats')
                 logger.info(
                     "Cache expired",
                     extra={
@@ -70,7 +70,6 @@ class StockstatsUtils:
             'value': value,
             'timestamp': time.time()
         }
-        logger = get_logger('dataflow', 'stockstats')
         logger.info(
             "Result cached",
             extra={
@@ -86,7 +85,6 @@ class StockstatsUtils:
             oldest_key = min(cls._indicator_cache.keys(), 
                            key=lambda k: cls._indicator_cache[k]['timestamp'])
             del cls._indicator_cache[oldest_key]
-            logger = get_logger('dataflow', 'stockstats')
             logger.info(
                 "Cache size limit reached, removed oldest entry",
                 extra={
@@ -101,7 +99,6 @@ class StockstatsUtils:
         """清理所有缓存"""
         cls._indicator_cache.clear()
         cls._data_cache.clear()
-        logger = get_logger('dataflow', 'stockstats')
         logger.info(
             "All caches cleared",
             extra={'component': 'stockstats_utils', 'action': 'cache_clear'}
@@ -150,7 +147,6 @@ class StockstatsUtils:
             raise ValueError(f"Missing required columns: {missing_columns}")
         
         if len(df) < 20:  # 大多数技术指标需要至少20个数据点
-            logger = get_logger('dataflow', 'stockstats')
             logger.warning(
                 "DataFrame has insufficient data for accurate indicators",
                 extra={
@@ -188,7 +184,6 @@ class StockstatsUtils:
         try:
             cls._validate_inputs(symbol, indicator, curr_date, data_dir)
         except ValueError as e:
-            logger = get_logger('dataflow', 'stockstats')
             logger.error(
                 "Input validation failed",
                 extra={
@@ -219,7 +214,6 @@ class StockstatsUtils:
                 )
                 
                 if not os.path.exists(file_path):
-                    logger = get_logger('dataflow', 'stockstats')
                     logger.error(
                         "Data file not found",
                         extra={
@@ -232,7 +226,6 @@ class StockstatsUtils:
                     return "Error: Stock data file not found. Please ensure data is downloaded first."
                 
                 if not os.access(file_path, os.R_OK):
-                    logger = get_logger('dataflow', 'stockstats')
                     logger.error(
                         "No read permission for data file",
                         extra={
@@ -245,7 +238,6 @@ class StockstatsUtils:
                     return "Error: No permission to read data file."
                 
                 data = pd.read_csv(file_path)
-                logger = get_logger('dataflow', 'stockstats')
                 logger.info(
                     "Successfully loaded offline data",
                     extra={
@@ -266,19 +258,15 @@ class StockstatsUtils:
                 df = wrap(data)
                 
             except FileNotFoundError:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Stock data file not found for symbol {symbol}")
                 return "Error: Yahoo Finance data not fetched yet! Please download data first."
             except pd.errors.EmptyDataError:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Data file is empty for symbol {symbol}")
                 return "Error: Stock data file is empty."
             except pd.errors.ParserError as e:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Failed to parse CSV file for symbol {symbol}: {e}")
                 return "Error: Failed to parse stock data file."
             except Exception as e:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Unexpected error loading offline data for {symbol}: {e}")
                 return f"Error: Failed to load stock data - {str(e)}"
         else:
@@ -304,14 +292,12 @@ class StockstatsUtils:
                     if not os.path.isabs(data_cache_dir):
                         data_cache_dir = os.path.join(config["system"]["project_dir"], data_cache_dir.lstrip("./"))
                 except Exception as e:
-                    logger = get_logger('dataflow', 'stockstats')
                     logger.error(f"Failed to get config: {e}")
                     data_cache_dir = "./data"  # 使用默认目录
                 
                 try:
                     os.makedirs(data_cache_dir, exist_ok=True)
                 except OSError as e:
-                    logger = get_logger('dataflow', 'stockstats')
                     logger.error(f"Failed to create cache directory {data_cache_dir}: {e}")
                     return "Error: Failed to create data cache directory."
 
@@ -324,7 +310,6 @@ class StockstatsUtils:
                     config_manager = DataSourceConfig()
                     data_manager = MultiSourceDataManager(config_manager.config)
                     
-                    logger = get_logger('dataflow', 'stockstats')
                     logger.info(f"Using multi-source data manager to get data for {symbol} from {start_date} to {end_date}")
                     data = data_manager.get_stock_data(symbol, start_date, end_date)
                     
@@ -416,7 +401,6 @@ class StockstatsUtils:
                 try:
                     df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
                 except Exception as e:
-                    logger = get_logger('dataflow', 'stockstats')
                     logger.error(f"Failed to convert Date column to proper format: {e}")
                     return "Error: Invalid date format in data."
 
@@ -434,25 +418,20 @@ class StockstatsUtils:
                         logger.error(f"Indicator {indicator} calculation returned None")
                         return f"Error: Failed to calculate indicator '{indicator}' - calculation returned None"
             except KeyError:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Invalid indicator: {indicator}")
                 return f"Error: Invalid indicator '{indicator}'. Please check the indicator name."
             except AttributeError as e:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"StockStats attribute error for indicator {indicator}: {e}")
                 return f"Error: Invalid indicator '{indicator}' or insufficient data for calculation."
             except TypeError as e:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Type error calculating indicator {indicator}: {e}")
                 return f"Error: Data type issue calculating indicator '{indicator}'. Please check data format."
             except Exception as e:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Failed to calculate indicator {indicator}: {e}")
                 return f"Error: Failed to calculate indicator '{indicator}' - {str(e)}"
             
             # 验证指标列是否存在
             if indicator not in df.columns:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Indicator {indicator} not found in DataFrame columns")
                 return f"Error: Indicator '{indicator}' was not calculated successfully."
             
@@ -460,7 +439,6 @@ class StockstatsUtils:
             try:
                 matching_rows = df[df["Date"].str.startswith(curr_date)]
             except Exception as e:
-                logger = get_logger('dataflow', 'stockstats')
                 logger.error(f"Error during date matching: {e}")
                 return "Error: Failed to match date in data."
 
@@ -470,7 +448,6 @@ class StockstatsUtils:
                      # 检查是否为有效数值
                      if pd.isna(indicator_value):
                          result = f"N/A: Indicator '{indicator}' not available for {curr_date} (insufficient data)"
-                         logger = get_logger('dataflow', 'stockstats')
                          logger.warning(f"Indicator {indicator} returned NaN for date {curr_date}")
                      else:
                          result = indicator_value
@@ -481,7 +458,6 @@ class StockstatsUtils:
                      
                      return result
                  except Exception as e:
-                     logger = get_logger('dataflow', 'stockstats')
                      logger.error(f"Error extracting indicator value: {e}")
                      return "Error: Failed to extract indicator value."
             else:
@@ -505,7 +481,6 @@ class StockstatsUtils:
                             # 检查是否为有效数值
                             if pd.isna(indicator_value):
                                 result = f"N/A: Indicator '{indicator}' not available (insufficient data)"
-                                logger = get_logger('dataflow', 'stockstats')
                                 logger.warning(f"Indicator {indicator} returned NaN for fallback date")
                             else:
                                 latest_date_str = latest_date.strftime("%Y-%m-%d")
@@ -520,11 +495,9 @@ class StockstatsUtils:
                     return "N/A: No trading data available"
                     
                 except Exception as e:
-                    logger = get_logger('dataflow', 'stockstats')
                     logger.error(f"Error during date fallback logic: {e}")
                     return "Error: Failed to find fallback trading date."
                     
         except Exception as e:
-            logger = get_logger('dataflow', 'stockstats')
             logger.error(f"Unexpected error during indicator calculation for {symbol}: {e}")
             return f"Error: Unexpected error - {str(e)}"

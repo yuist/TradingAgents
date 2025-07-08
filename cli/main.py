@@ -20,6 +20,13 @@ from rich import box
 from rich.align import Align
 from rich.rule import Rule
 import sys
+import os
+
+# 导入优化的显示模块
+from .optimized_display import (
+    OptimizedDisplay, DisplayConfig, DisplayMode, MessageType,
+    get_display, set_display_mode
+)
 
 # Add the project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -29,8 +36,10 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.config_manager import get_config_manager
 from tradingagents.utils.logging_manager import LoggerManager
 import os
-from cli.models import AnalystType
-from cli.utils import *
+import logging
+import logging.handlers
+from .models import AnalystType
+from .utils import *
 
 console = Console()
 
@@ -39,6 +48,10 @@ app = typer.Typer(
     help="TradingAgents CLI: Multi-Agents LLM Financial Trading Framework",
     add_completion=True,  # Enable shell completion
 )
+
+# 全局显示配置
+GLOBAL_DISPLAY_CONFIG = DisplayConfig()
+GLOBAL_OPTIMIZED_DISPLAY = None
 
 
 # Create a deque to store recent messages with a maximum length
@@ -908,7 +921,7 @@ def run_analysis():
         else:
             content_str = str(content)
         
-        # 使用统一日志管理器记录
+        # 使用统一日志管理器记录到文件（不输出到控制台）
         extra_data = {
             'message_type': msg_type,
             'agent_name': agent_name,
@@ -918,15 +931,40 @@ def run_analysis():
         if agent_name:
             extra_data['agent'] = agent_name
         
-        # 根据消息类型选择日志级别
+        # 只记录到文件，不输出到控制台
+        # 创建一个临时的文件专用日志器
+        file_logger = logging.getLogger(f'tradingagents.cli.debug')
+        file_logger.setLevel(logging.DEBUG)
+        
+        # 确保只有文件处理器，没有控制台处理器
+        if not file_logger.handlers:
+            log_dir = Path("logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_dir / "debug.log",
+                maxBytes=50 * 1024 * 1024,
+                backupCount=5,
+                encoding='utf-8'
+            )
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            file_handler.setFormatter(formatter)
+            file_logger.addHandler(file_handler)
+            file_logger.propagate = False  # 防止传播到根日志器
+        
+        # 根据消息类型选择日志级别，但只记录到文件
         if msg_type == "System":
-            cli_logger.info(f"[{msg_type}] {content_str}", extra=extra_data)
+            file_logger.info(f"[{msg_type}] {content_str}", extra=extra_data)
         elif msg_type == "Reasoning":
-            cli_logger.debug(f"[{msg_type}] {content_str}", extra=extra_data)
+            file_logger.debug(f"[{msg_type}] {content_str}", extra=extra_data)
         elif msg_type == "Tool":
-            cli_logger.info(f"[{msg_type}] {content_str}", extra=extra_data)
+            file_logger.info(f"[{msg_type}] {content_str}", extra=extra_data)
         else:
-            cli_logger.debug(f"[{msg_type}] {content_str}", extra=extra_data)
+            file_logger.debug(f"[{msg_type}] {content_str}", extra=extra_data)
+        
+        # Debug消息只记录到文件，不显示到界面以避免刷屏
+        # 如果需要查看debug信息，可以查看日志文件
 
     def save_message_decorator(obj, func_name):
         func = getattr(obj, func_name)
@@ -991,53 +1029,56 @@ def run_analysis():
     message_buffer.add_tool_call = save_tool_call_decorator(message_buffer, "add_tool_call")
     message_buffer.update_report_section = save_report_section_decorator(message_buffer, "update_report_section")
 
-    # Now start the display layout
-    layout = create_layout()
+    # 使用优化的显示器
+    global GLOBAL_OPTIMIZED_DISPLAY
+    display = GLOBAL_OPTIMIZED_DISPLAY
+    
+    # 如果是静默模式，使用传统的简单输出
+    if display.config.mode == DisplayMode.SILENT:
+        console.print(f"[green]开始分析 {selections['ticker']} ({selections['analysis_date']})[/green]")
+        console.print(f"[blue]选择的分析师: {', '.join(analyst.value for analyst in selections['analysts'])}[/blue]")
+    else:
+        # 启动优化显示器
+        display.start()
+        
+        # 添加初始消息
+        display.log_system(f"选择股票代码: {selections['ticker']}")
+        display.log_system(f"分析日期: {selections['analysis_date']}")
+        display.log_system(f"选择的分析师: {', '.join(analyst.value for analyst in selections['analysts'])}")
 
-    with Live(layout, refresh_per_second=4) as live:
-        # Initial display
-        update_display(layout)
-
-        # Add initial messages
-        message_buffer.add_message("System", f"Selected ticker: {selections['ticker']}")
-        message_buffer.add_message(
-            "System", f"Analysis date: {selections['analysis_date']}"
-        )
-        message_buffer.add_message(
-            "System",
-            f"Selected analysts: {', '.join(analyst.value for analyst in selections['analysts'])}",
-        )
-        update_display(layout)
-
-        # Reset agent statuses
-        for agent in message_buffer.agent_status:
+    # 重置代理状态
+    agent_names = [
+        "Market Analyst", "Social Analyst", "News Analyst", "Fundamentals Analyst",
+        "Bull Researcher", "Bear Researcher", "Research Manager",
+        "Trader",
+        "Risky Analyst", "Neutral Analyst", "Safe Analyst",
+        "Portfolio Manager"
+    ]
+    
+    for agent in agent_names:
+        if display.config.mode != DisplayMode.SILENT:
+            display.update_agent_status(agent, "pending")
+        else:
             message_buffer.update_agent_status(agent, "pending")
-
-        # Reset report sections
-        for section in message_buffer.report_sections:
-            message_buffer.report_sections[section] = None
-        message_buffer.current_report = None
-        message_buffer.final_report = None
-
-        # Update agent status to in_progress for the first analyst
-        first_analyst = f"{selections['analysts'][0].value.capitalize()} Analyst"
+    
+    # 设置第一个分析师为进行中
+    first_analyst = f"{selections['analysts'][0].value.capitalize()} Analyst"
+    if display.config.mode != DisplayMode.SILENT:
+        display.update_agent_status(first_analyst, "in_progress")
+        display.log_system(f"开始分析 {selections['ticker']} ({selections['analysis_date']})...")
+    else:
         message_buffer.update_agent_status(first_analyst, "in_progress")
-        update_display(layout)
+        console.print(f"[yellow]启动 {first_analyst}...[/yellow]")
 
-        # Create spinner text
-        spinner_text = (
-            f"Analyzing {selections['ticker']} on {selections['analysis_date']}..."
-        )
-        update_display(layout, spinner_text)
+    # 初始化状态和图参数
+    init_agent_state = graph.propagator.create_initial_state(
+        selections["ticker"], selections["analysis_date"]
+    )
+    args = graph.propagator.get_graph_args()
 
-        # Initialize state and get graph args
-        init_agent_state = graph.propagator.create_initial_state(
-            selections["ticker"], selections["analysis_date"]
-        )
-        args = graph.propagator.get_graph_args()
-
-        # Stream the analysis
-        trace = []
+    # 开始流式分析
+    trace = []
+    try:
         for chunk in graph.graph.stream(init_agent_state, **args):
             # 记录chunk的详细信息到调试日志
             log_debug_message("Chunk", f"Processing chunk with keys: {list(chunk.keys())}")
@@ -1057,72 +1098,128 @@ def run_analysis():
                 # 记录原始消息到调试日志
                 log_debug_message(f"Raw_{msg_type}", last_message)
 
-                # Add message to buffer
-                message_buffer.add_message(msg_type, content)                
+                # 根据显示模式处理消息
+                if display.config.mode == DisplayMode.SILENT:
+                    # 静默模式：只记录到buffer
+                    message_buffer.add_message(msg_type, content)
+                else:
+                    # 使用优化显示器记录消息
+                    if msg_type == "Reasoning":
+                        display.log_agent("AI Agent", content)
+                    else:
+                        display.log_system(content)
+                    # 同时保持原有buffer用于报告生成
+                    message_buffer.add_message(msg_type, content)
 
                 # If it's a tool call, add it to tool calls
                 if hasattr(last_message, "tool_calls"):
                     for tool_call in last_message.tool_calls:
                         # Handle both dictionary and object tool calls
                         if isinstance(tool_call, dict):
-                            message_buffer.add_tool_call(
-                                tool_call["name"], tool_call["args"]
-                            )
+                            tool_name = tool_call["name"]
+                            tool_args = tool_call["args"]
                         else:
-                            message_buffer.add_tool_call(tool_call.name, tool_call.args)
+                            tool_name = tool_call.name
+                            tool_args = tool_call.args
+                        
+                        # 根据显示模式处理工具调用
+                        if display.config.mode == DisplayMode.SILENT:
+                            message_buffer.add_tool_call(tool_name, tool_args)
+                        else:
+                            display.log_tool(tool_name, tool_args)
+                            message_buffer.add_tool_call(tool_name, tool_args)
 
                 # Update reports and agent status based on chunk content
                 # Analyst Team Reports
                 if "market_report" in chunk and chunk["market_report"]:
                     log_debug_message("Agent_Status", "Market Analyst completed, updating report")
-                    message_buffer.update_report_section(
-                        "market_report", chunk["market_report"]
-                    )
-                    message_buffer.update_agent_status("Market Analyst", "completed")
+                    
+                    # 更新报告和状态
+                    if display.config.mode == DisplayMode.SILENT:
+                        message_buffer.update_report_section("market_report", chunk["market_report"])
+                        message_buffer.update_agent_status("Market Analyst", "completed")
+                        console.print("[green]✓ 市场分析完成[/green]")
+                    else:
+                        display.update_report_section("market_report", chunk["market_report"])
+                        display.update_agent_status("Market Analyst", "completed")
+                        message_buffer.update_report_section("market_report", chunk["market_report"])
+                        message_buffer.update_agent_status("Market Analyst", "completed")
+                    
                     # Set next analyst to in_progress
                     if "social" in selections["analysts"]:
                         log_debug_message("Agent_Status", "Starting Social Analyst")
-                        message_buffer.update_agent_status(
-                            "Social Analyst", "in_progress"
-                        )
+                        if display.config.mode == DisplayMode.SILENT:
+                            message_buffer.update_agent_status("Social Analyst", "in_progress")
+                        else:
+                            display.update_agent_status("Social Analyst", "in_progress")
+                            message_buffer.update_agent_status("Social Analyst", "in_progress")
 
                 if "sentiment_report" in chunk and chunk["sentiment_report"]:
                     log_debug_message("Agent_Status", "Social Analyst completed, updating sentiment report")
-                    message_buffer.update_report_section(
-                        "sentiment_report", chunk["sentiment_report"]
-                    )
-                    message_buffer.update_agent_status("Social Analyst", "completed")
+                    
+                    if display.config.mode == DisplayMode.SILENT:
+                        message_buffer.update_report_section("sentiment_report", chunk["sentiment_report"])
+                        message_buffer.update_agent_status("Social Analyst", "completed")
+                        console.print("[green]✓ 情感分析完成[/green]")
+                    else:
+                        display.update_report_section("sentiment_report", chunk["sentiment_report"])
+                        display.update_agent_status("Social Analyst", "completed")
+                        message_buffer.update_report_section("sentiment_report", chunk["sentiment_report"])
+                        message_buffer.update_agent_status("Social Analyst", "completed")
+                    
                     # Set next analyst to in_progress
                     if "news" in selections["analysts"]:
                         log_debug_message("Agent_Status", "Starting News Analyst")
-                        message_buffer.update_agent_status(
-                            "News Analyst", "in_progress"
-                        )
+                        if display.config.mode == DisplayMode.SILENT:
+                            message_buffer.update_agent_status("News Analyst", "in_progress")
+                        else:
+                            display.update_agent_status("News Analyst", "in_progress")
+                            message_buffer.update_agent_status("News Analyst", "in_progress")
 
                 if "news_report" in chunk and chunk["news_report"]:
                     log_debug_message("Agent_Status", "News Analyst completed, updating news report")
-                    message_buffer.update_report_section(
-                        "news_report", chunk["news_report"]
-                    )
-                    message_buffer.update_agent_status("News Analyst", "completed")
+                    
+                    if display.config.mode == DisplayMode.SILENT:
+                        message_buffer.update_report_section("news_report", chunk["news_report"])
+                        message_buffer.update_agent_status("News Analyst", "completed")
+                        console.print("[green]✓ 新闻分析完成[/green]")
+                    else:
+                        display.update_report_section("news_report", chunk["news_report"])
+                        display.update_agent_status("News Analyst", "completed")
+                        message_buffer.update_report_section("news_report", chunk["news_report"])
+                        message_buffer.update_agent_status("News Analyst", "completed")
+                    
                     # Set next analyst to in_progress
                     if "fundamentals" in selections["analysts"]:
                         log_debug_message("Agent_Status", "Starting Fundamentals Analyst")
-                        message_buffer.update_agent_status(
-                            "Fundamentals Analyst", "in_progress"
-                        )
+                        if display.config.mode == DisplayMode.SILENT:
+                            message_buffer.update_agent_status("Fundamentals Analyst", "in_progress")
+                        else:
+                            display.update_agent_status("Fundamentals Analyst", "in_progress")
+                            message_buffer.update_agent_status("Fundamentals Analyst", "in_progress")
 
                 if "fundamentals_report" in chunk and chunk["fundamentals_report"]:
                     log_debug_message("Agent_Status", "Fundamentals Analyst completed, starting research team")
-                    message_buffer.update_report_section(
-                        "fundamentals_report", chunk["fundamentals_report"]
-                    )
-                    message_buffer.update_agent_status(
-                        "Fundamentals Analyst", "completed"
-                    )
+                    
+                    if display.config.mode == DisplayMode.SILENT:
+                        message_buffer.update_report_section("fundamentals_report", chunk["fundamentals_report"])
+                        message_buffer.update_agent_status("Fundamentals Analyst", "completed")
+                        console.print("[green]✓ 基本面分析完成[/green]")
+                    else:
+                        display.update_report_section("fundamentals_report", chunk["fundamentals_report"])
+                        display.update_agent_status("Fundamentals Analyst", "completed")
+                        message_buffer.update_report_section("fundamentals_report", chunk["fundamentals_report"])
+                        message_buffer.update_agent_status("Fundamentals Analyst", "completed")
+                    
                     # Set all research team members to in_progress
                     log_debug_message("Agent_Status", "Starting research team debate")
-                    update_research_team_status("in_progress")
+                    if display.config.mode == DisplayMode.SILENT:
+                        update_research_team_status("in_progress")
+                    else:
+                        # 更新研究团队状态
+                        for agent in ["Bull Researcher", "Bear Researcher", "Research Manager"]:
+                            display.update_agent_status(agent, "in_progress")
+                            message_buffer.update_agent_status(agent, "in_progress")
 
                 # Research Team - Handle Investment Debate State
                 if (
@@ -1135,36 +1232,68 @@ def run_analysis():
                     # Update Bull Researcher status and report
                     if "bull_history" in debate_state and debate_state["bull_history"]:
                         log_debug_message("Bull_Researcher", "Processing bull researcher response")
-                        # Keep all research team members in progress
-                        update_research_team_status("in_progress")
+                        
                         # Extract latest bull response
                         bull_responses = debate_state["bull_history"].split("\n")
                         latest_bull = bull_responses[-1] if bull_responses else ""
                         if latest_bull:
                             log_debug_message("Bull_Researcher", latest_bull)
-                            message_buffer.add_message("Reasoning", latest_bull)
-                            # Update research report with bull's latest analysis
-                            message_buffer.update_report_section(
-                                "investment_plan",
-                                f"### Bull Researcher Analysis\n{latest_bull}",
-                            )
+                            
+                            if display.config.mode == DisplayMode.SILENT:
+                                message_buffer.add_message("Reasoning", latest_bull)
+                                message_buffer.update_report_section(
+                                    "investment_plan",
+                                    f"### Bull Researcher Analysis\n{latest_bull}",
+                                )
+                                update_research_team_status("in_progress")
+                            else:
+                                display.log_agent("Bull Researcher", latest_bull)
+                                display.update_report_section(
+                                    "investment_plan",
+                                    f"### Bull Researcher Analysis\n{latest_bull}",
+                                )
+                                message_buffer.add_message("Reasoning", latest_bull)
+                                message_buffer.update_report_section(
+                                    "investment_plan",
+                                    f"### Bull Researcher Analysis\n{latest_bull}",
+                                )
+                                # 保持研究团队状态
+                                for agent in ["Bull Researcher", "Bear Researcher", "Research Manager"]:
+                                    display.update_agent_status(agent, "in_progress")
+                                    message_buffer.update_agent_status(agent, "in_progress")
 
                     # Update Bear Researcher status and report
                     if "bear_history" in debate_state and debate_state["bear_history"]:
                         log_debug_message("Bear_Researcher", "Processing bear researcher response")
-                        # Keep all research team members in progress
-                        update_research_team_status("in_progress")
+                        
                         # Extract latest bear response
                         bear_responses = debate_state["bear_history"].split("\n")
                         latest_bear = bear_responses[-1] if bear_responses else ""
                         if latest_bear:
                             log_debug_message("Bear_Researcher", latest_bear)
-                            message_buffer.add_message("Reasoning", latest_bear)
-                            # Update research report with bear's latest analysis
-                            message_buffer.update_report_section(
-                                "investment_plan",
-                                f"{message_buffer.report_sections['investment_plan']}\n\n### Bear Researcher Analysis\n{latest_bear}",
-                            )
+                            
+                            if display.config.mode == DisplayMode.SILENT:
+                                message_buffer.add_message("Reasoning", latest_bear)
+                                message_buffer.update_report_section(
+                                    "investment_plan",
+                                    f"{message_buffer.report_sections['investment_plan']}\n\n### Bear Researcher Analysis\n{latest_bear}",
+                                )
+                                update_research_team_status("in_progress")
+                            else:
+                                display.log_agent("Bear Researcher", latest_bear)
+                                display.update_report_section(
+                                    "investment_plan",
+                                    f"{message_buffer.report_sections['investment_plan']}\n\n### Bear Researcher Analysis\n{latest_bear}",
+                                )
+                                message_buffer.add_message("Reasoning", latest_bear)
+                                message_buffer.update_report_section(
+                                    "investment_plan",
+                                    f"{message_buffer.report_sections['investment_plan']}\n\n### Bear Researcher Analysis\n{latest_bear}",
+                                )
+                                # 保持研究团队状态
+                                for agent in ["Bull Researcher", "Bear Researcher", "Research Manager"]:
+                                    display.update_agent_status(agent, "in_progress")
+                                    message_buffer.update_agent_status(agent, "in_progress")
 
                     # Update Research Manager status and final decision
                     if (
@@ -1172,25 +1301,42 @@ def run_analysis():
                         and debate_state["judge_decision"]
                     ):
                         log_debug_message("Research_Manager", "Processing final decision")
-                        # Keep all research team members in progress until final decision
-                        update_research_team_status("in_progress")
                         log_debug_message("Research_Manager", debate_state["judge_decision"])
-                        message_buffer.add_message(
-                            "Reasoning",
-                            f"Research Manager: {debate_state['judge_decision']}",
-                        )
-                        # Update research report with final decision
-                        message_buffer.update_report_section(
-                            "investment_plan",
-                            f"{message_buffer.report_sections['investment_plan']}\n\n### Research Manager Decision\n{debate_state['judge_decision']}",
-                        )
-                        # Mark all research team members as completed
+                        
+                        if display.config.mode == DisplayMode.SILENT:
+                            message_buffer.add_message(
+                                "Reasoning",
+                                f"Research Manager: {debate_state['judge_decision']}",
+                            )
+                            message_buffer.update_report_section(
+                                "investment_plan",
+                                f"{message_buffer.report_sections['investment_plan']}\n\n### Research Manager Decision\n{debate_state['judge_decision']}",
+                            )
+                            update_research_team_status("completed")
+                            message_buffer.update_agent_status("Risky Analyst", "in_progress")
+                            console.print("[green]✓ 投资计划完成，开始风险管理[/green]")
+                        else:
+                            display.log_agent("Research Manager", f"Final Decision: {debate_state['judge_decision']}")
+                            display.update_report_section(
+                                "investment_plan",
+                                f"{message_buffer.report_sections['investment_plan']}\n\n### Research Manager Decision\n{debate_state['judge_decision']}",
+                            )
+                            message_buffer.add_message(
+                                "Reasoning",
+                                f"Research Manager: {debate_state['judge_decision']}",
+                            )
+                            message_buffer.update_report_section(
+                                "investment_plan",
+                                f"{message_buffer.report_sections['investment_plan']}\n\n### Research Manager Decision\n{debate_state['judge_decision']}",
+                            )
+                            # 完成研究团队，开始风险管理
+                            for agent in ["Bull Researcher", "Bear Researcher", "Research Manager"]:
+                                display.update_agent_status(agent, "completed")
+                                message_buffer.update_agent_status(agent, "completed")
+                            display.update_agent_status("Risky Analyst", "in_progress")
+                            message_buffer.update_agent_status("Risky Analyst", "in_progress")
+                        
                         log_debug_message("Agent_Status", "Research team completed, starting risk management")
-                        update_research_team_status("completed")
-                        # Set first risk analyst to in_progress
-                        message_buffer.update_agent_status(
-                            "Risky Analyst", "in_progress"
-                        )
 
                 # Trading Team
                 if (
@@ -1295,41 +1441,126 @@ def run_analysis():
                             "Portfolio Manager", "completed"
                         )
 
-                # Update the display
-                update_display(layout)
-
             trace.append(chunk)
 
-        # Get final state and decision
-        final_state = trace[-1]
-        decision = graph.process_signal(final_state["final_trade_decision"])
-
-        # Update all agent statuses to completed
-        for agent in message_buffer.agent_status:
-            message_buffer.update_agent_status(agent, "completed")
-
-        message_buffer.add_message(
-            "Analysis", f"Completed analysis for {selections['analysis_date']}"
-        )
+        # 分析完成处理
+        final_state = trace[-1] if trace else {}
         
-        # 添加调试日志文件位置提示
-        message_buffer.add_message(
-            "System", f"调试消息已保存到: {debug_log_file}"
-        )
+        # 更新所有代理状态为完成
+        for agent in agent_names:
+            if display.config.mode == DisplayMode.SILENT:
+                message_buffer.update_agent_status(agent, "completed")
+            else:
+                display.update_agent_status(agent, "completed")
+                message_buffer.update_agent_status(agent, "completed")
 
-        # Update final report sections
-        for section in message_buffer.report_sections.keys():
-            if section in final_state:
-                message_buffer.update_report_section(section, final_state[section])
+        # 添加完成消息
+        completion_msg = f"分析完成: {selections['ticker']} ({selections['analysis_date']})"
+        debug_msg = f"调试消息已保存到: {debug_log_file}"
+        
+        if display.config.mode == DisplayMode.SILENT:
+            console.print(f"[green]✓ {completion_msg}[/green]")
+            console.print(f"[dim]📁 {debug_msg}[/dim]")
+            message_buffer.add_message("Analysis", completion_msg)
+            message_buffer.add_message("System", debug_msg)
+        else:
+            display.log_system(completion_msg)
+            display.log_system(debug_msg)
+            message_buffer.add_message("Analysis", completion_msg)
+            message_buffer.add_message("System", debug_msg)
 
-        # Display the complete final report
-        display_complete_report(final_state)
+        # 更新最终报告部分
+        if final_state:
+            for section in message_buffer.report_sections.keys():
+                if section in final_state:
+                    if display.config.mode == DisplayMode.SILENT:
+                        message_buffer.update_report_section(section, final_state[section])
+                    else:
+                        display.update_report_section(section, final_state[section])
+                        message_buffer.update_report_section(section, final_state[section])
 
-        update_display(layout)
+        # 显示完整的最终报告
+        if display.config.mode != DisplayMode.SILENT:
+            display_complete_report(final_state)
+        else:
+            display_complete_report(final_state)
+            
+    except Exception as e:
+        error_msg = f"分析过程中发生错误: {str(e)}"
+        if display.config.mode == DisplayMode.SILENT:
+            console.print(f"[red]❌ {error_msg}[/red]")
+        else:
+            display.log_error(error_msg)
+            display.stop()
+        raise
+    finally:
+        # 清理显示器
+        if display.config.mode != DisplayMode.SILENT and hasattr(display, 'stop'):
+            display.stop()
 
 
 @app.command("analyze")
-def analyze():
+def analyze(
+    display_mode: str = typer.Option(
+        "compact",
+        "--display-mode", "-d",
+        help="显示模式: full(完整), compact(紧凑), minimal(最小), silent(静默)"
+    ),
+    max_messages: int = typer.Option(
+        15,
+        "--max-messages", "-m",
+        help="最大显示消息数量"
+    ),
+    refresh_rate: float = typer.Option(
+        2.0,
+        "--refresh-rate", "-r",
+        help="界面刷新频率(Hz)"
+    ),
+    show_debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="显示调试信息"
+    ),
+    show_tool_details: bool = typer.Option(
+        False,
+        "--tool-details",
+        help="显示工具调用详情"
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose", "-v",
+        help="详细输出模式"
+    )
+):
+    """运行交易分析"""
+    # 配置显示模式
+    global GLOBAL_DISPLAY_CONFIG, GLOBAL_OPTIMIZED_DISPLAY
+    
+    # 验证显示模式
+    try:
+        mode = DisplayMode(display_mode.lower())
+    except ValueError:
+        console.print(f"[red]错误: 无效的显示模式 '{display_mode}'[/red]")
+        console.print("[yellow]可用模式: full, compact, minimal, silent[/yellow]")
+        raise typer.Exit(1)
+    
+    # 更新全局配置
+    GLOBAL_DISPLAY_CONFIG.mode = mode
+    GLOBAL_DISPLAY_CONFIG.max_messages = max_messages
+    GLOBAL_DISPLAY_CONFIG.refresh_rate = refresh_rate
+    GLOBAL_DISPLAY_CONFIG.show_debug = show_debug or verbose
+    GLOBAL_DISPLAY_CONFIG.show_tool_details = show_tool_details or verbose
+    
+    # 如果是详细模式，启用更多选项
+    if verbose:
+        GLOBAL_DISPLAY_CONFIG.show_timestamps = True
+        GLOBAL_DISPLAY_CONFIG.max_content_length = 300
+        GLOBAL_DISPLAY_CONFIG.message_filters[MessageType.DEBUG] = True
+    
+    # 创建优化显示器
+    GLOBAL_OPTIMIZED_DISPLAY = OptimizedDisplay(GLOBAL_DISPLAY_CONFIG)
+    
+    # 运行分析
     run_analysis()
 
 

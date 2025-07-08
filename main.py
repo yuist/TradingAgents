@@ -12,7 +12,7 @@ if __name__ == "__main__":
     config_path = "config.yaml"  # 配置文件路径
     
     if os.path.exists(config_path):
-        print("🔧 使用配置文件系统")
+        # 使用配置文件系统
         # 使用配置文件初始化
         trading_graph = TradingAgentsGraph(
             selected_analysts=["market", "social", "news", "fundamentals"],
@@ -20,7 +20,7 @@ if __name__ == "__main__":
             config_path=config_path
         )
     else:
-        print("⚠️  配置文件不存在，使用传统配置方式")
+        # 配置文件不存在，使用传统配置方式
         # 方式2: 传统配置方式（向后兼容）
         config = copy.deepcopy(DEFAULT_CONFIG)
         
@@ -41,4 +41,4 @@ if __name__ == "__main__":
     
     # 执行交易决策
     final_state, decision = trading_graph.propagate("AAPL", "2024-01-15")
-    print(f"交易决策结果: {decision}")
+    # 交易决策结果已生成

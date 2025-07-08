@@ -5,7 +5,9 @@
 集成多数据源管理器，提供统一的数据获取接口
 """
 
+import time
 import pandas as pd
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from ..utils.logging_manager import get_logger
@@ -18,6 +20,9 @@ try:
         get_stock_data_with_fallback
     )
     from .data_source_config import get_default_config
+    from .concurrent_fetcher import get_concurrent_fetcher
+    from .data_cache import get_data_cache
+    from .circuit_breaker import get_circuit_breaker_manager
 except ImportError:
     # 如果导入失败，提供占位符
     def get_stock_data_with_fallback(*args, **kwargs):
@@ -25,6 +30,15 @@ except ImportError:
     
     def get_default_config():
         return {}
+    
+    def get_concurrent_fetcher(*args, **kwargs):
+        raise ImportError("并发获取器未正确安装")
+    
+    def get_data_cache(*args, **kwargs):
+        raise ImportError("数据缓存未正确安装")
+    
+    def get_circuit_breaker_manager(*args, **kwargs):
+        raise ImportError("熔断器管理器未正确安装")
 
 # 导入原有的数据获取函数作为备用
 try:
@@ -111,7 +125,7 @@ class EnhancedDataInterface:
                 raise
     
     def get_stock_data(self, symbol: str, start_date: str, end_date: str, 
-                      force_source: str = None) -> str:
+                      force_source: str = None, timeout: int = 10) -> str:
         """
         获取股票历史数据（兼容原接口格式）
         
@@ -120,41 +134,84 @@ class EnhancedDataInterface:
             start_date: 开始日期 (YYYY-MM-DD)
             end_date: 结束日期 (YYYY-MM-DD)
             force_source: 强制使用指定数据源
+            timeout: 超时时间（秒）
         
         Returns:
             CSV格式的股票数据字符串
         """
+        start_time = time.time()
         logger.info(f"开始获取股票数据: {symbol}, {start_date} 到 {end_date}")
         
         try:
+            # 检查缓存
+            try:
+                cache = get_data_cache()
+                cached_data = cache.get(symbol, start_date, end_date)
+                if cached_data is not None:
+                    logger.info(f"缓存命中: {symbol}")
+                    return self._dataframe_to_csv_string(cached_data, symbol, source="cache")
+            except Exception as cache_error:
+                logger.warning(f"缓存检查失败: {cache_error}")
+            
             # 尝试使用多数据源管理器
             if self.manager and not force_source:
                 logger.info("使用多数据源管理器获取数据")
                 
-                # 使用线程超时控制
-                import threading
-                result = [None]
-                exception = [None]
-                
-                def get_data_worker():
-                    try:
-                        result[0] = self.manager.get_stock_data(symbol, start_date, end_date)
-                    except Exception as e:
-                        exception[0] = e
-                
-                thread = threading.Thread(target=get_data_worker)
-                thread.daemon = True
-                thread.start()
-                thread.join(timeout=60)  # 60秒超时
-                
-                if thread.is_alive():
-                    logger.error("多数据源管理器获取数据超时，切换到备用接口")
-                elif exception[0]:
-                    raise exception[0]
-                elif result[0] is not None and not result[0].empty:
-                    return self._dataframe_to_csv_string(result[0], symbol)
-                else:
-                    logger.warning("多数据源管理器返回空数据")
+                try:
+                    # 获取可用的数据源（排除熔断的）
+                    circuit_manager = get_circuit_breaker_manager()
+                    available_providers = []
+                    
+                    for market, providers in self.manager.providers.items():
+                        for provider in providers:
+                            if circuit_manager.can_execute(provider.name):
+                                available_providers.append(provider)
+                            else:
+                                logger.info(f"数据源 {provider.name} 已熔断，跳过")
+                    
+                    if available_providers:
+                        # 使用并发获取器
+                        concurrent_fetcher = get_concurrent_fetcher(timeout=timeout)
+                        
+                        # 分离高优先级和低优先级数据源
+                        high_priority = [p for p in available_providers if hasattr(p, 'priority') and p.priority <= 2]
+                        low_priority = [p for p in available_providers if hasattr(p, 'priority') and p.priority > 2]
+                        
+                        if not high_priority:
+                            high_priority = available_providers[:2]  # 取前两个作为高优先级
+                        if not low_priority:
+                            low_priority = available_providers[2:]  # 其余作为低优先级
+                        
+                        # 使用混合策略
+                        result = concurrent_fetcher.fetch_data_hybrid(
+                            high_priority, low_priority, symbol, start_date, end_date,
+                            validation_func=getattr(self.manager, '_validate_data', None)
+                        )
+                        
+                        if result and hasattr(result, 'is_valid') and result.is_valid():
+                            # 更新熔断器状态
+                            circuit_manager.record_success(result.source)
+                            
+                            # 缓存数据
+                            try:
+                                cache = get_data_cache()
+                                cache.set(symbol, start_date, end_date, result.data, result.source)
+                            except Exception as cache_error:
+                                logger.warning(f"缓存设置失败: {cache_error}")
+                            
+                            elapsed_time = time.time() - start_time
+                            logger.info(f"多数据源获取成功: {symbol}, 来源: {result.source}, 耗时: {elapsed_time:.2f}秒")
+                            return self._dataframe_to_csv_string(result.data, symbol, source=result.source)
+                        else:
+                            # 记录所有数据源失败
+                            for provider in available_providers:
+                                circuit_manager.record_failure(provider.name)
+                            logger.warning(f"多数据源管理器返回空数据: {symbol}")
+                    else:
+                        logger.warning(f"所有数据源均已熔断: {symbol}")
+                        
+                except Exception as multi_error:
+                    logger.error(f"多数据源管理器失败: {multi_error}")
             
             # 如果指定了数据源，尝试使用特定数据源
             elif force_source:
@@ -163,23 +220,45 @@ class EnhancedDataInterface:
             # 最后备用：使用原始Yahoo Finance接口
             if self.enable_fallback:
                 logger.warning("使用原始Yahoo Finance接口作为备用")
-                return _original_yahoo_finance(symbol, start_date, end_date)
+                elapsed_time = time.time() - start_time
+                remaining_timeout = max(1, timeout - int(elapsed_time))
+                
+                result_csv = _original_yahoo_finance(symbol, start_date, end_date)
+                
+                # 尝试缓存原始接口的结果
+                try:
+                    lines = result_csv.split('\n')
+                    data_lines = [line for line in lines if line and not line.startswith('#')]
+                    if len(data_lines) > 1:
+                        df = pd.read_csv(pd.StringIO('\n'.join(data_lines)), index_col=0, parse_dates=True)
+                        cache = get_data_cache()
+                        cache.set(symbol, start_date, end_date, df, "yahoo_fallback")
+                except Exception as cache_error:
+                    logger.warning(f"缓存原始接口结果失败: {cache_error}")
+                
+                return result_csv
             
             else:
                 raise Exception("所有数据源均不可用")
                 
         except Exception as e:
-            logger.error(f"获取股票数据失败 {symbol}: {e}")
+            elapsed_time = time.time() - start_time
+            logger.error(f"获取股票数据失败 {symbol}: {e}, 耗时: {elapsed_time:.2f}秒")
             
             # 最后的备用尝试
             if self.enable_fallback and not force_source:
                 try:
-                    logger.info("尝试使用原始Yahoo Finance接口")
+                    remaining_timeout = max(1, timeout - int(elapsed_time))
+                    logger.info("最后尝试原始Yahoo Finance接口")
                     return _original_yahoo_finance(symbol, start_date, end_date)
                 except Exception as fallback_error:
                     logger.error(f"备用接口也失败: {fallback_error}")
             
             return f"未找到股票代码 {symbol} 的数据"
+        
+        finally:
+            total_time = time.time() - start_time
+            logger.info(f"总耗时: {total_time:.2f}秒")
     
     def _get_data_from_specific_source(self, symbol: str, start_date: str, 
                                      end_date: str, source_name: str) -> str:
@@ -196,20 +275,20 @@ class EnhancedDataInterface:
         
         raise ValueError(f"未找到数据源: {source_name}")
     
-    def _dataframe_to_csv_string(self, df: pd.DataFrame, symbol: str) -> str:
-        """将DataFrame转换为CSV字符串格式（兼容原接口）"""
-        if df.empty:
-            return f"未找到股票代码 {symbol} 的数据"
-        
-        # 添加注释头
-        header = f"# 股票代码: {symbol}\n"
-        header += f"# 数据获取时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        header += f"# 数据条数: {len(df)}\n"
-        
-        # 转换为CSV格式
-        csv_content = df.to_csv()
-        
-        return header + csv_content
+    def _dataframe_to_csv_string(self, df: pd.DataFrame, symbol: str, source: str = "unknown") -> str:
+         """将DataFrame转换为CSV字符串格式（兼容原接口）"""
+         if df.empty:
+             return f"未找到股票代码 {symbol} 的数据"
+         
+         # 添加注释头
+         header = f"# 股票代码: {symbol}\n"
+         header += f"# 数据获取时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+         header += f"# 数据条数: {len(df)}\n"
+         header += f"# 数据源: {source}\n"
+         
+         # 转换为CSV格式
+         csv_string = df.to_csv()
+         return header + csv_string
     
     def get_dataframe(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """

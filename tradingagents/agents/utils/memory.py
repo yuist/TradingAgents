@@ -1,6 +1,10 @@
 import chromadb
 from chromadb.config import Settings
 from openai import OpenAI
+import logging
+
+# 获取内存管理专用日志器
+logger = logging.getLogger('tradingagents.agents.memory')
 
 
 class FinancialSituationMemory:
@@ -19,7 +23,7 @@ class FinancialSituationMemory:
         
         # 检查嵌入配置是否有效
         if not embedding_config['api_key']:
-            print(f"警告：未找到嵌入模型API密钥（{embedding_config['provider']}），嵌入功能将被禁用")
+            logger.warning(f"未找到嵌入模型API密钥（{embedding_config['provider']}），嵌入功能将被禁用")
             self.embedding_enabled = False
             self.embedding = None
             # 创建一个虚拟客户端用于其他功能
@@ -36,7 +40,7 @@ class FinancialSituationMemory:
             self.embedding = embedding_config['model']
             self.embedding_enabled = True
             
-            print(f"嵌入模型配置: {embedding_config['provider']}/{embedding_config['model']} (维度: {self.embedding_dimensions})")
+            logger.info(f"嵌入模型配置: {embedding_config['provider']}/{embedding_config['model']} (维度: {self.embedding_dimensions})")
         self.chroma_client = chromadb.Client(Settings(allow_reset=True))
         self.situation_collection = self.chroma_client.create_collection(name=name)
 
@@ -147,10 +151,7 @@ if __name__ == "__main__":
         recommendations = matcher.get_memories(current_situation, n_matches=2)
 
         for i, rec in enumerate(recommendations, 1):
-            print(f"\nMatch {i}:")
-            print(f"Similarity Score: {rec['similarity_score']:.2f}")
-            print(f"Matched Situation: {rec['matched_situation']}")
-            print(f"Recommendation: {rec['recommendation']}")
+            logger.debug(f"Match {i}: Similarity Score: {rec['similarity_score']:.2f}, Matched Situation: {rec['matched_situation']}, Recommendation: {rec['recommendation']}")
 
     except Exception as e:
-        print(f"Error during recommendation: {str(e)}")
+        logger.error(f"Error during recommendation: {str(e)}")

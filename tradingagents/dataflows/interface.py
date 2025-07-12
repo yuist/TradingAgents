@@ -34,6 +34,44 @@ from ..utils.logging_manager import get_logger
 # 配置日志
 logger = get_logger('dataflow', 'interface')
 
+def get_stock_name_from_reliable_source(ticker: str) -> str:
+    """从可靠数据源获取股票的正确名称
+    
+    Args:
+        ticker: 股票代码
+        
+    Returns:
+        str: 股票的正确名称，如果获取失败则返回原始ticker
+    """
+    try:
+        # 首先尝试从新浪财经获取
+        from .multi_source_manager import SinaFinanceProvider
+        sina_provider = SinaFinanceProvider()
+        realtime_data = sina_provider.get_realtime_data(ticker)
+        if realtime_data and 'name' in realtime_data and realtime_data['name']:
+            logger.info(f"从新浪财经获取到股票名称: {ticker} -> {realtime_data['name']}")
+            return realtime_data['name']
+    except Exception as e:
+        logger.warning(f"从新浪财经获取股票名称失败: {ticker}, 错误: {e}")
+    
+    try:
+        # 备用方案：使用Yahoo Finance
+        import yfinance as yf
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        if 'longName' in info and info['longName']:
+            logger.info(f"从Yahoo Finance获取到股票名称: {ticker} -> {info['longName']}")
+            return info['longName']
+        elif 'shortName' in info and info['shortName']:
+            logger.info(f"从Yahoo Finance获取到股票简称: {ticker} -> {info['shortName']}")
+            return info['shortName']
+    except Exception as e:
+        logger.warning(f"从Yahoo Finance获取股票名称失败: {ticker}, 错误: {e}")
+    
+    # 如果都失败了，返回原始ticker
+    logger.warning(f"无法获取股票 {ticker} 的名称，使用原始代码")
+    return ticker
+
 def _get_data_dir():
     """获取数据目录路径"""
     from ..config_manager import get_config_manager
@@ -869,6 +907,10 @@ def get_stock_news_openai(ticker: str, curr_date: str) -> str:
             logger.error(error_msg)
             raise ValueError(f"配置错误: {error_msg}")
         
+        # 获取股票的正确名称
+        stock_name = get_stock_name_from_reliable_source(ticker)
+        logger.info(f"获取到股票名称: {ticker} -> {stock_name}")
+        
         client = OpenAI(
             api_key=llm_config.api_key,
             base_url=llm_config.base_url,
@@ -892,7 +934,7 @@ def get_stock_news_openai(ticker: str, curr_date: str) -> str:
                 messages=[
                     {
                         "role": "user",
-                        "content": f"Search for recent news and social media discussions about {ticker} stock from 7 days before {curr_date} to {curr_date}. Focus on news that could impact stock price and trading decisions. Please provide sources and dates."
+                        "content": f"Search for recent news and social media discussions about {ticker} ({stock_name}) stock from 7 days before {curr_date} to {curr_date}. Focus on news that could impact stock price and trading decisions. Please provide sources and dates. Note: {ticker} is the stock code for {stock_name}."
                     }
                 ],
                 temperature=0.1,
@@ -910,7 +952,7 @@ def get_stock_news_openai(ticker: str, curr_date: str) -> str:
                 messages=[
                     {
                         "role": "user",
-                        "content": f"Search for recent news and social media discussions about {ticker} stock from 7 days before {curr_date} to {curr_date}. Focus on news that could impact stock price and trading decisions. Please provide sources and dates."
+                        "content": f"Search for recent news and social media discussions about {ticker} ({stock_name}) stock from 7 days before {curr_date} to {curr_date}. Focus on news that could impact stock price and trading decisions. Please provide sources and dates. Note: {ticker} is the stock code for {stock_name}."
                     }
                 ],
                 temperature=0.1,

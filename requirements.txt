@@ -1,50 +1,50 @@
 typing-extensions
-# 核心 LangChain 包
+# Core LangChain packages
 langchain-openai
 langchain-experimental
 langchain_anthropic
 langchain-google-genai
 
-# 新增 LLM 提供商支持
-# 注意：某些提供商可能使用 OpenAI 兼容接口，无需额外包
+# New LLM provider support
+# Note: Some providers may use OpenAI compatible interfaces, no additional packages needed
 
-# 配置管理
+# Configuration management
 pyyaml>=6.0
 
-# 数据处理和分析
+# Data processing and analysis
 pandas
 yfinance
 stockstats
 akshare
 tushare
 
-# 金融数据 API
+# Financial data APIs
 finnhub-python
 eodhd
 alpha-vantage
 polygon-api-client
 
-# 社交媒体和新闻
+# Social media and news
 praw
 feedparser
 parsel
 requests
 
-# 图和工作流
+# Graph and workflow
 langgraph
 
-# 向量数据库和记忆
+# Vector database and memory
 chromadb
 
-# 回测和交易
+# Backtesting and trading
 backtrader
 
-# 用户界面
+# User interface
 chainlit
 rich
 questionary
 
-# 工具和实用程序
+# Tools and utilities
 setuptools
 tqdm
 pytz

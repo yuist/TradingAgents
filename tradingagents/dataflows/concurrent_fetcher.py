@@ -26,7 +26,10 @@ class FetchResult:
     
     def is_valid(self) -> bool:
         """检查结果是否有效"""
-        return self.success and self.data is not None and not self.data.empty
+        return (self.success and 
+                self.data is not None and 
+                hasattr(self.data, 'empty') and 
+                not self.data.empty)
 
 class ConcurrentDataFetcher:
     """并发数据获取器"""

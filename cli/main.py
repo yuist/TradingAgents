@@ -21,6 +21,8 @@ from rich.align import Align
 from rich.rule import Rule
 import sys
 import os
+import logging
+import logging.handlers
 
 # 导入优化的显示模块
 from .optimized_display import (
@@ -31,13 +33,41 @@ from .optimized_display import (
 # Add the project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# 在导入其他模块之前，先设置日志配置以避免控制台输出
+from tradingagents.utils.logging_manager import LoggerManager
+
+# 创建生产环境日志配置（禁用控制台输出）
+production_log_config = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'root_level': 'INFO',
+    'log_dir': 'logs',
+    'max_file_size': 50 * 1024 * 1024,  # 50MB
+    'backup_count': 10,
+    'retention_days': 30,
+    'enable_async': True,
+    'enable_structured': True,
+    'enable_console': False,  # 禁用控制台输出
+    'categories': {
+        'trading': {'level': 'WARNING', 'file': 'trading.log'},
+        'dataflow': {'level': 'WARNING', 'file': 'dataflow.log'},
+        'llm': {'level': 'WARNING', 'file': 'llm.log'},
+        'config': {'level': 'WARNING', 'file': 'config.log'},
+        'utils': {'level': 'WARNING', 'file': 'utils.log'},
+        'cli': {'level': 'INFO', 'file': 'cli.log'},
+        'performance': {'level': 'INFO', 'file': 'performance.log'},
+        'error': {'level': 'ERROR', 'file': 'error.log'},
+        'audit': {'level': 'INFO', 'file': 'audit.log'}
+    }
+}
+
+# 初始化全局日志管理器
+_global_logger_manager = LoggerManager(production_log_config)
+
+# 现在可以安全地导入其他模块
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.config_manager import get_config_manager
-from tradingagents.utils.logging_manager import LoggerManager
-import os
-import logging
-import logging.handlers
 from .models import AnalystType
 from .utils import *
 
@@ -894,10 +924,8 @@ def run_analysis():
     log_file = results_dir / "message_tool.log"
     log_file.touch(exist_ok=True)
     
-    # 初始化统一日志管理器
-    config_manager = get_config_manager()
-    logging_config = config_manager.get_logging_config()
-    logger_manager = LoggerManager(logging_config)
+    # 使用已经初始化的全局日志管理器
+    logger_manager = _global_logger_manager
     
     # 获取CLI专用日志器
     cli_logger = logger_manager.get_logger('cli')

@@ -879,7 +879,8 @@ class SinaFinanceProvider(DataSourceInterface):
             response = requests.get(url, headers=headers, timeout=10, proxies=proxies)
             response.raise_for_status()
             
-            response.encoding = response.apparent_encoding
+            # 新浪财经使用GBK编码
+            response.encoding = 'gbk'
             content = response.text
             if content and '=' in content:
                 try:
@@ -1364,7 +1365,7 @@ class MultiSourceDataManager:
                 continue
             
             # 检查熔断器状态
-            circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+            circuit_breaker = circuit_manager.get_breaker(provider.name)
             if not circuit_breaker.can_execute():
                 logger.debug(f"跳过熔断的数据源: {provider.name}")
                 continue
@@ -1397,15 +1398,14 @@ class MultiSourceDataManager:
                 low_priority_providers=low_priority,
                 symbol=symbol,
                 start_date=start_date,
-                end_date=end_date,
-                timeout=timeout
+                end_date=end_date
             )
             
-            if result.success and result.data is not None:
+            if result and result.success and result.data is not None:
                 # 验证数据质量
                 if self._validate_data(result.data, symbol):
                     # 记录熔断器成功
-                    circuit_breaker = circuit_manager.get_circuit_breaker(result.source)
+                    circuit_breaker = circuit_manager.get_breaker(result.source)
                     circuit_breaker.record_success()
                     
                     # 更新提供者健康状态
@@ -1424,7 +1424,7 @@ class MultiSourceDataManager:
             
             # 如果并发获取失败，记录所有尝试过的数据源的熔断器失败
             for provider in available_providers:
-                circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+                circuit_breaker = circuit_manager.get_breaker(provider.name)
                 circuit_breaker.record_failure()
                 provider.update_health_failure(Exception("并发获取失败"))
             
@@ -1474,7 +1474,7 @@ class MultiSourceDataManager:
                 continue
             
             # 检查熔断器状态
-            circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+            circuit_breaker = circuit_manager.get_breaker(provider.name)
             if not circuit_breaker.can_execute():
                 logger.debug(f"跳过熔断的数据源: {provider.name}")
                 continue
@@ -1505,9 +1505,9 @@ class MultiSourceDataManager:
                 timeout=timeout
             )
             
-            if result.success and result.data is not None:
+            if result and result.success and result.data is not None:
                 # 记录熔断器成功
-                circuit_breaker = circuit_manager.get_circuit_breaker(result.source)
+                circuit_breaker = circuit_manager.get_breaker(result.source)
                 circuit_breaker.record_success()
                 
                 # 更新提供者健康状态
@@ -1524,7 +1524,7 @@ class MultiSourceDataManager:
             
             # 如果并发获取失败，记录所有尝试过的数据源的熔断器失败
             for provider in available_providers:
-                circuit_breaker = circuit_manager.get_circuit_breaker(provider.name)
+                circuit_breaker = circuit_manager.get_breaker(provider.name)
                 circuit_breaker.record_failure()
                 provider.update_health_failure(Exception("并发获取实时数据失败"))
             
@@ -1591,6 +1591,17 @@ def get_multi_source_manager(config: Dict[str, Any] = None) -> MultiSourceDataMa
     global _global_manager
     
     if _global_manager is None:
+        # 如果没有提供配置，则从DataSourceConfig加载
+        if config is None:
+            try:
+                from .data_source_config import DataSourceConfig
+                config_manager = DataSourceConfig()
+                config = config_manager.get_config()
+                logger.info(f"已从DataSourceConfig加载配置: {list(config.get('data_sources', {}).keys())}")
+            except Exception as e:
+                logger.warning(f"无法加载DataSourceConfig，使用默认配置: {e}")
+                config = {}
+        
         _global_manager = MultiSourceDataManager(config)
     
     return _global_manager
